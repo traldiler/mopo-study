@@ -807,7 +807,7 @@ function gdocKind(l) {
   if (l.kind !== "видео" && /drive\.google\.com\/(file\/d\/|open\?id=)/.test(u)) return "pdf";
   return "";
 }
-const DOCC = "mopo-docs-v2";                           /* v2: таблицы 1 в 1 и кликабельное оглавление — старые копии не берём */
+const DOCC = "mopo-docs-v3";                           /* v2: таблицы 1 в 1 и кликабельное оглавление — старые копии не берём */
 async function docCacheGet(id) { try { const r = await (await caches.open(DOCC)).match("/__doc/" + encodeURIComponent(id)); return r ? await r.json() : null; } catch (e) { return null; } }
 async function docCachePut(id, v) { try { await (await caches.open(DOCC)).put("/__doc/" + encodeURIComponent(id), new Response(JSON.stringify(v), { headers: { "Content-Type": "application/json" } })); } catch (e) { } }
 const docPage = (text) => `<body style="font:15px/1.5 Arial,sans-serif;color:#232227;padding:28px">${text}</body>`;
@@ -875,7 +875,12 @@ function pdfPage(b64) {
   })().catch(function(e){ document.getElementById("st").innerHTML='<div id="msg">Не удалось показать файл: '+e.message+'</div>'; });<\/script></body></html>`;
 }
 function renderDoc(frame, r) {
-  frame.srcdoc = r.kind === "html" ? docInject(r.html, !!r.sheet) : watermark(pdfPage(r.pdf));
+  let html = r.html || "";
+  if (r.kind === "html" && r.simple) {                  /* выгрузку «как у Google» получить не удалось — честно показываем упрощённый вид и причину */
+    const note = `<div style="font:12px/1.4 Arial;background:#FFF3D6;color:#8A5A00;padding:8px 12px;border-bottom:1px solid #F2D9A6">Упрощённый вид таблицы: оформление Google получить не удалось${r.why ? " (" + esc(r.why) + ")" : ""}.</div>`;
+    html = /<body[^>]*>/i.test(html) ? html.replace(/<body[^>]*>/i, m => m + note) : note + html;
+  }
+  frame.srcdoc = r.kind === "html" ? docInject(html, !!r.sheet) : watermark(pdfPage(r.pdf));
 }
 async function loadDoc(frame, l) {
   const cached = await docCacheGet(l.id);
