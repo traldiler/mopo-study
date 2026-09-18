@@ -1572,3 +1572,16 @@ label.f{font-family:var(--f-text); font-size:13px; font-weight:600; letter-spaci
 .savebadge.bad{background:#B77A00;}
 @media (max-width:700px){ .savebadge{left:50%; transform:translateX(-50%); bottom:12px;} }
 .tcsink{position:absolute; width:1px; height:1px; opacity:0; pointer-events:none; left:-9999px;}
+.soonnote{margin:-4px 0 14px; padding:8px 12px; border-radius:10px; background:#F7F6F4; font-size:13px;}
+
+/* материалы: состояние видно сразу у кнопок */
+.mst{flex:none; font-size:11px; font-weight:700; padding:3px 9px; border-radius:999px; letter-spacing:.02em;}
+.mst.soon{background:#FFF3D6; color:#8A5A00;}
+.mst.off{background:#ECEBE8; color:#6D6B72;}
+.mrow.off .t, .mrow.soonrow .t{opacity:.55;}
+.mrow.off .ic, .mrow.soonrow .ic{opacity:.5;}
+.mrow.off .t{text-decoration:none;}
+/* пока сервер удаляет или прячет — строка приглушена, кнопки не нажимаются */
+.pending{position:relative; opacity:.45; pointer-events:none;}
+.pending::after{content:attr(data-pend); position:absolute; right:8px; top:50%; transform:translateY(-50%); font-size:12px; font-weight:700;
+  color:var(--graphite, #232227); background:#fff; padding:3px 10px; border-radius:999px; box-shadow:0 2px 8px rgba(0,0,0,.12);}

@@ -39,9 +39,11 @@ async function api(action, data) {
     SWR[key] = { v: v, at: Date.now() };
     return JSON.parse(JSON.stringify(v));
   }
-  if (/^admin\.|^question\./.test(action) && action !== "admin.boot") {       /* что-то поменяли — списки перечитаем в фоне */
+  if (/^admin\.|^question\./.test(action) && action !== "admin.boot") {       /* что-то поменяли — списки перечитаем, когда сервер закончит */
+    const r = await apiRaw(action, data);
     Object.keys(SWR).forEach(k => delete SWR[k]);
-    setTimeout(() => adminPrefetch(true), 400);
+    setTimeout(() => adminPrefetch(true), 300);
+    return r;
   }
   return apiRaw(action, data);
 }
@@ -433,12 +435,14 @@ function blockNum(n) {
   return i >= 0 ? (bs[i].num || i + 1) : n;
 }
 const subQuizzes = b => [b.quiz].concat(b.subs.map(s => s.quiz)).filter(Boolean);
+/* материалы с пометкой «скоро» ещё не загружены — в прохождении их не считаем, пока не появятся */
+const readyOf = ls => ls.filter(l => l.ready !== false);
 function blockStat(b) {
-  const lessons = b.subs.flatMap(s => s.lessons);
+  const all = b.subs.flatMap(s => s.lessons), lessons = readyOf(all);
   const done = lessons.filter(l => PR.progress.lessons[l.id]).length;
   const qs = subQuizzes(b), passed = qs.filter(q => (PR.progress.quizzes[q] || {}).passed).length;
   const kept = qs.filter(q => { const x = PR.progress.quizzes[q] || {}; return x.passed || x.retake; }).length;   /* тест обновили — следующий блок не запираем */
-  return { lessons: lessons.length, done: done, quizzes: qs, passed: passed,
+  return { lessons: lessons.length, soon: all.length - lessons.length, done: done, quizzes: qs, passed: passed,
            ready: done === lessons.length && passed === qs.length, opens: done === lessons.length && kept === qs.length, started: done > 0 || passed > 0 };
 }
 function openMap() {
@@ -472,7 +476,7 @@ async function screenCabinet(keep) {
   if (!keep) $("#app").innerHTML = `<div class="card"><p class="lead">Загружаем программу…</p></div>`;
   try { await loadCabinet(); } catch (e) { return fail(e); }
   const open = openMap(), blocks = PR.program.blocks;
-  const all = blocks.flatMap(b => b.subs.flatMap(s => s.lessons));
+  const all = readyOf(blocks.flatMap(b => b.subs.flatMap(s => s.lessons)));
   const done = all.filter(l => PR.progress.lessons[l.id]).length;
   const qAll = blocks.flatMap(subQuizzes), qDone = qAll.filter(q => (PR.progress.quizzes[q] || {}).passed).length;
   const nx = continuePoint();
@@ -566,12 +570,13 @@ function openBlock(n, focusLesson, subIndex) {
       <div><b>${pct(st.done, st.lessons)}%</b><span>готовность блока</span></div>
       <div><b>${notesCount}</b><span>ваших заметок</span></div>
     </div>
+    ${st.soon ? `<p class="hint soonnote">Ещё ${plural(st.soon, "материал не загружен", "материала не загружено", "материалов не загружено")} — вернитесь позже. На закрытие блока это не влияет.</p>` : ""}
     ${many && !indexable ? `<div class="chips sticky" id="chips">
         ${subs.map((s, i) => {
-          const dn = s.lessons.filter(l => PR.progress.lessons[l.id]).length;
+          const rl = readyOf(s.lessons), dn = rl.filter(l => PR.progress.lessons[l.id]).length;
           const q = s.quiz ? PR.progress.quizzes[s.quiz] : null;
-          const cls = dn === s.lessons.length && (!s.quiz || (q && q.passed)) ? "ok" : dn ? "part" : "";
-          return `<button type="button" data-i="${i}" class="${cls}${i === cur ? " on" : ""}">${esc(s.title || "Материалы")}<i>${dn}/${s.lessons.length}</i></button>`;
+          const cls = dn === rl.length && (!s.quiz || (q && q.passed)) ? "ok" : dn ? "part" : "";
+          return `<button type="button" data-i="${i}" class="${cls}${i === cur ? " on" : ""}">${esc(s.title || "Материалы")}<i>${dn}/${rl.length}</i></button>`;
         }).join("")}
         <button type="button" data-all="1" class="ghost">Показать все темы</button></div>` : ""}
     <div id="subs"></div>`;
@@ -579,16 +584,16 @@ function openBlock(n, focusLesson, subIndex) {
   const host = $("#subs");
 
   const subStat = sub => {
-    const dn = sub.lessons.filter(l => PR.progress.lessons[l.id]).length;
+    const rl = readyOf(sub.lessons), dn = rl.filter(l => PR.progress.lessons[l.id]).length;
     const q = sub.quiz ? PR.progress.quizzes[sub.quiz] : null;
-    return { dn, q, total: sub.lessons.length, ok: dn === sub.lessons.length && (!sub.quiz || (q && q.passed)) };
+    return { dn, q, total: rl.length, ok: dn === rl.length && (!sub.quiz || (q && q.passed)) };
   };
   const drawSub = (sub, i) => {
     const sec = el("section", "sub"); sec.id = "sub-" + i;
     const { dn, q } = subStat(sub);
     if (sub.title) sec.innerHTML = `<div class="subhead"><h3>${esc(sub.title)}</h3>
-      <span>${dn} / ${sub.lessons.length}${sub.quiz ? (q && q.passed ? " · тест сдан" : q && q.retake ? " · тест обновлён" : " · тест не сдан") : ""}</span>
-      <div class="hbar small"><i style="width:${pct(dn, sub.lessons.length)}%"></i></div></div>`;
+      <span>${dn} / ${readyOf(sub.lessons).length}${sub.quiz ? (q && q.passed ? " · тест сдан" : q && q.retake ? " · тест обновлён" : " · тест не сдан") : ""}</span>
+      <div class="hbar small"><i style="width:${pct(dn, readyOf(sub.lessons).length)}%"></i></div></div>`;
     sub.lessons.forEach(l => sec.appendChild(lessonRow(l)));
     if (sub.quiz) sec.appendChild(quizRow(sub.quiz, "Мини-тест: " + (sub.title || b.title)));
     host.appendChild(sec);
@@ -726,6 +731,7 @@ function driveEmbed(url) {
   const m = String(url).match(/drive\.google\.com\/file\/d\/([^/]+)/);
   if (m) return "https://drive.google.com/file/d/" + m[1] + "/preview";
   const d = String(url).match(/docs\.google\.com\/(document|presentation|spreadsheets)\/d\/([^/]+)/);
+  if (d && d[1] === "presentation") return `https://docs.google.com/presentation/d/${d[2]}/embed?start=false&loop=false`;   /* режим показа: без «редактировать» и «скачать» */
   if (d) return `https://docs.google.com/${d[1]}/d/${d[2]}/preview`;
   return url;
 }
@@ -821,6 +827,7 @@ function openLesson(l, at, quote) {
   }
   const v = el("div", "viewer split");
   const video = l.kind === "видео", inner = isInternal(l.url), textual = /^konspekt\//.test(String(l.url));
+  const slides = /docs\.google\.com\/presentation\//.test(String(l.url));
   const src = inner ? l.url : driveEmbed(l.url);
   let tab = quote && notesOf(l.id).some(n => isHl(n) && n.quote === quote) ? "hl" : "note";
   v.innerHTML = `<div class="vhead"><b>${esc(l.title)}</b>
@@ -841,9 +848,10 @@ function openLesson(l, at, quote) {
               <input type="text" class="ntime" placeholder="12:40" inputmode="numeric">
               <button type="button" class="link" data-a="tcreset">сброс</button>
             </div>
-            <p class="hint tiny">Счётчик сам включается и встаёт на паузу, когда вы нажимаете play/pause в плеере. Разошёлся с видео — поправьте кнопкой или впишите время руками.</p>` : ""}
+            <p class="hint tiny">Счётчик идёт по вашим кликам по видео: Google Диск не сообщает, на какой минуте плеер. Пока видео грузится и после перемотки время может разойтись — поправьте его в поле вручную.</p>` : ""}
           ${textual ? '<p class="hint tiny">Выделите фразу в конспекте: цветной маркер — в «Выделения», кнопка «Заметка» — сюда.</p>' : ""}
-          ${!textual && !video ? '<p class="hint tiny">Маркер и цитаты по выделению работают только в конспектах. Здесь нужную фразу скопируйте (⌘C) и вставьте в заметку.</p>' : ""}
+          ${slides ? '<p class="hint tiny">Текст со слайдов скопировать нельзя — Google показывает их картинками. Листайте стрелками ← → на клавиатуре или под слайдом.</p>'
+            : !textual && !video ? '<p class="hint tiny">Маркер и цитаты по выделению работают только в конспектах. Здесь нужную фразу скопируйте (⌘C) и вставьте в заметку.</p>' : ""}
           <textarea class="ntext" placeholder="Пишите прямо во время просмотра — окно не закрывается"></textarea>
           <div class="nbtns"><button class="btn" data-a="save" type="button">Сохранить заметку</button>
             <button class="btn ghost" data-a="clear" type="button" hidden>Сбросить</button></div>

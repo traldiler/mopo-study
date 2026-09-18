@@ -45,7 +45,7 @@ async function admStudents() {
   } catch (e) { $("#sst").textContent = e.message; return; }
   const list = data.students || [];
   const blocks = prog.blocks;
-  const lessonsIn = b => b.subs.flatMap(s => s.lessons).length;
+  const lessonsIn = b => readyOf(b.subs.flatMap(s => s.lessons)).length;       /* «скоро» не считаем */
   const quizzesIn = b => [b.quiz].concat(b.subs.map(s => s.quiz)).filter(Boolean);
   $("#sst").innerHTML = list.length
     ? `Всего сотрудников: ${list.length}. Цвет квадрата — состояние блока.`
@@ -59,7 +59,7 @@ async function admStudents() {
     const line = blocks.map(b => {
       const qs = quizzesIn(b);
       const passed = qs.filter(q => (st.quizzes || {})[q] && st.quizzes[q].passed).length;
-      const lessons = b.subs.flatMap(s => s.lessons);
+      const lessons = readyOf(b.subs.flatMap(s => s.lessons));
       const dn = lessons.filter(l => (st.lessons || {})[l.id]).length;
       const ready = dn === lessons.length && passed === qs.length;
       const started = dn > 0 || passed > 0;
@@ -87,7 +87,7 @@ async function admStudents() {
       <div class="foot" style="margin-top:8px"><button class="btn ghost" data-a="detail" type="button">Подробно по блокам</button></div>
       <div class="sdetail" hidden></div>`;
     const notReady = blocks.filter(b => {
-      const qs = quizzesIn(b), lessons = b.subs.flatMap(s => s.lessons);
+      const qs = quizzesIn(b), lessons = readyOf(b.subs.flatMap(s => s.lessons));
       const dn = lessons.filter(l => (st.lessons || {})[l.id]).length;
       const passed = qs.filter(q => (st.quizzes || {})[q] && st.quizzes[q].passed).length;
       return !(dn === lessons.length && passed === qs.length);
@@ -112,7 +112,7 @@ async function admStudents() {
       if (!box.innerHTML) {
         box.innerHTML = blocks.map(b => {
           const rows = b.subs.map(sub => {
-            const lessons = sub.lessons, dn = lessons.filter(l => (st.lessons || {})[l.id]).length;
+            const lessons = readyOf(sub.lessons), dn = lessons.filter(l => (st.lessons || {})[l.id]).length;
             const q = sub.quiz ? (st.quizzes || {})[sub.quiz] : null;
             const pc = lessons.length ? Math.round(dn / lessons.length * 100) : 0;
             return `<div class="srow"><span>${esc(sub.title || b.title)}</span>
@@ -467,24 +467,38 @@ async function delMaterial(kind, row, d) {
       .concat(shown ? [{ label: "Спрятать", cls: "green", value: "hide" }] : [])
       .concat(mayDel ? [{ label: "Удалить навсегда", cls: "red", value: "del" }] : []) });
   if (!v) return false;
-  if (v === "hide") return setVisible(kind, row, false);
+  if (v === "hide") return setVisible(kind, row, false, d);
+  const undo = matPending(kind, row, "Удаляем…");
   try {
     if (kind === "block") await api("admin.blockDel", { n: row.n });
     else if (kind === "sub") await api("admin.subDel", { id: row.id });
     else await api("admin.lessonDel", { id: row.id });
+    /* сервер закончил — убираем из своей копии списка, без повторной долгой загрузки */
+    if (kind === "block") { d.lessons = d.lessons.filter(l => !inB(l)); d.subs = d.subs.filter(x => Number(x.block) !== Number(row.n)); d.blocks = d.blocks.filter(x => Number(x.n) !== Number(row.n)); }
+    else if (kind === "sub") { d.lessons = d.lessons.filter(l => !inS(l)); d.subs = d.subs.filter(x => String(x.id) !== String(row.id)); }
+    else d.lessons = d.lessons.filter(l => l.id !== row.id);
     PR.program = null; toast(kind === "block" ? "Блок удалён" : kind === "sub" ? "Тема удалена" : "Материал удалён");
     return true;
-  } catch (e) { fail(e); return false; }
+  } catch (e) { undo(); fail(e); return false; }
 }
-async function setVisible(kind, row, active) {
+async function setVisible(kind, row, active, d) {
+  const undo = matPending(kind, row, active ? "Показываем…" : "Прячем…");
   try {
     await api("admin.visible", { kind: kind, id: kind === "block" ? row.n : row.id, active: active });
+    row.active = active;
     PR.program = null;
     toast(active ? "Снова видно сотрудникам" : (kind === "block" ? "Блок спрятан" : kind === "sub" ? "Тема спрятана" : "Материал спрятан") + " — вернуть можно кнопкой «Показать»");
     return true;
-  } catch (e) { fail(e); return false; }
+  } catch (e) { undo(); fail(e); return false; }
 }
-async function admMaterials() {
+/* пока сервер думает (5–10 с), строка приглушена и кнопки не нажимаются — чтобы не удалить случайно что-то другое */
+function matPending(kind, row, text) {
+  const key = kind === "block" ? "b:" + row.n : kind === "sub" ? "s:" + row.id : "l:" + row.id;
+  const els = [...document.querySelectorAll(`[data-mk="${CSS.escape(key)}"]`)];
+  els.forEach(e => { e.classList.add("pending"); e.dataset.pend = text; e.querySelectorAll("button").forEach(b => b.disabled = true); });
+  return () => els.forEach(e => { e.classList.remove("pending"); e.querySelectorAll("button").forEach(b => b.disabled = false); });
+}
+async function admMaterials(local) {                 /* local — своя копия списка после правки: рисуем сразу, без долгой загрузки */
   const y = window.scrollY, host = $("#admbody");
   const firstLoad = !$("#ltbl");
   if (firstLoad) host.innerHTML = `<div class="card"><div class="qhead"><div><h2>Материалы кабинета</h2>
@@ -494,17 +508,17 @@ async function admMaterials() {
   let d;
   let exams = { topics: {}, excluded: [] }, base = {};
   try {
-    d = await matData(); await quizData();
+    d = local || await matData(); await quizData();
     exams = await api("admin.examList"); base = await examBaseCounts();
   } catch (e) { return fail(e); }
   const box = $("#ltbl"); box.innerHTML = "";
   const quizInfo = id => { const q = QZ.data && QZ.data.quizzes[id]; return q ? plural(q.questions.length, "вопрос", "вопроса", "вопросов") + " · порог " + q.pass : "мини-тест"; };
-  const reload = async ok => { if (ok) { await admMaterials(); } };
+  const reload = async ok => { if (ok) { await admMaterials(d); } };
   const headBtns = (wrap, kind, row) => {
     const shown = truthy(row.active);
     const sh = el("button", "mshow" + (shown ? "" : " on"), shown ? "Спрятать" : "Показать"); sh.type = "button";
     sh.title = shown ? "Скрыть от сотрудников, ничего не удаляя" : "Снова показать сотрудникам";
-    sh.onclick = async () => reload(shown ? await delMaterial(kind, row, d) : await setVisible(kind, row, true));
+    sh.onclick = async () => reload(shown ? await delMaterial(kind, row, d) : await setVisible(kind, row, true, d));
     wrap.appendChild(sh);
   };
   const quizRowAdm = (quizId, label, opts) => {
@@ -529,6 +543,7 @@ async function admMaterials() {
   d.blocks.forEach((b, bi) => {
     const bShown = truthy(b.active);
     const sec = el("div", "mblock" + (bShown ? "" : " hidden-b"));
+    sec.dataset.mk = "b:" + b.n;
     const subs = d.subs.filter(s => Number(s.block) === Number(b.n));
     const loose = d.lessons.filter(l => Number(l.block) === Number(b.n) && !String(l.sub || ""));
     const blockLessons = d.lessons.filter(l => Number(l.block) === Number(b.n) && truthy(l.active));
@@ -550,27 +565,31 @@ async function admMaterials() {
     groups.forEach(g => {
       if (g.s) {
         const sShown = truthy(g.s.active);
-        const ht = el("div", "mhead" + (sShown ? "" : " hidden-s"), `<div class="mtopic">${esc(g.s.title)} <i>${g.ls.length}</i>${sShown ? "" : ' <span class="tag">скрыта</span>'}</div>`);
+        const ht = el("div", "mhead" + (sShown ? "" : " hidden-s"), `<div class="mtopic">${esc(g.s.title)} <i>${g.ls.length}</i>${sShown ? "" : ' <span class="mst off">скрыта</span>'}</div>`);
+        ht.dataset.mk = "s:" + g.s.id;
         const sb = el("span", "mbtn"); headBtns(sb, "sub", g.s); ht.appendChild(sb);
         sec.appendChild(ht);
       }
       g.ls.forEach(l => {
-        const r = el("div", "mrow" + (truthy(l.active) ? "" : " off"));
+        const r = el("div", "mrow" + (truthy(l.active) ? "" : " off") + (truthy(l.ready) ? "" : " soonrow"));
+        r.dataset.mk = "l:" + l.id;
         r.innerHTML = `<span class="ic">${KIND[l.kind] || "•"}</span><span class="t">${esc(l.title)}
-            <small>${esc(l.kind)}${truthy(l.ready) ? "" : " · скоро"}${truthy(l.active) ? "" : " · скрыт от сотрудников"}</small></span>
+            <small>${esc(l.kind)}</small></span>
+          ${truthy(l.ready) ? "" : '<span class="mst soon" title="Сотрудники видят строку с пометкой «скоро», открыть не могут">скоро</span>'}
+          ${truthy(l.active) ? "" : '<span class="mst off" title="Сотрудники этот материал не видят">скрыт</span>'}
           <button class="btn small white" type="button">Изменить</button>
           ${truthy(l.active) ? "" : '<button class="mshow on" data-show="1" type="button">Показать</button>'}
           ${truthy(l.active) || canDelMat(l) ? '<button class="mdel" type="button" title="Удалить или спрятать">Удалить</button>' : ""}`;
         r.querySelector(".btn").onclick = () => lessonForm(l, d);
-        if (r.querySelector("[data-show]")) r.querySelector("[data-show]").onclick = async () => reload(await setVisible("lesson", l, true));
+        if (r.querySelector("[data-show]")) r.querySelector("[data-show]").onclick = async () => reload(await setVisible("lesson", l, true, d));
         if (r.querySelector(".mdel")) r.querySelector(".mdel").onclick = async () => reload(await delMaterial("lesson", l, d));
         sec.appendChild(r);
       });
       if (!g.ls.length) sec.appendChild(el("div", "hint tiny", g.s ? "В этой теме пока нет материалов" : "В блоке пока нет материалов"));
       if (g.s) sec.appendChild(quizRowAdm(g.s.quiz || "", g.s.quiz ? "Мини-тест по теме" : "Добавить мини-тест к теме",
         { sub: g.s.id, block: b.n, topic: g.s.title, lessons: g.ls }));
+      if (!g.s && !subs.length && g.ls.length && !b.quiz) sec.appendChild(quizRowAdm("", "Добавить мини-тест к блоку", { block: b.n, topic: b.title, lessons: blockLessons }));
       if (g.s || g.ls.length) sec.appendChild(examRow(g, b, subs.length > 0));
-      else if (!subs.length && g.ls.length && !b.quiz) sec.appendChild(quizRowAdm("", "Добавить мини-тест к блоку", { block: b.n, topic: b.title, lessons: blockLessons }));
     });
     if (b.quiz) sec.appendChild(quizRowAdm(b.quiz, subs.length ? "Контрольный тест по блоку" : "Мини-тест по блоку", { block: b.n, topic: b.title, lessons: blockLessons }));
     else if (subs.length) sec.appendChild(quizRowAdm("", "Добавить контрольный тест по блоку", { block: b.n, topic: b.title, lessons: blockLessons }));
@@ -778,7 +797,13 @@ function lessonForm(l, d) {
       ready: $$("#lready").checked, active: $$("#lact").checked };
     if (!data.title) { toast("Напишите название"); return; }
     if (data.ready && !data.url) { toast("У готового материала нужна ссылка. Или снимите «Материал готов»"); return; }
-    try { await api("admin.lessonSave", { data: data }); close(); PR.program = null; admMaterials(); toast("Сохранено"); } catch (e) { fail(e); }
+    const btn = $$('[data-a="1"]'); btn.disabled = true; btn.textContent = "Сохраняем…";   /* сервер думает несколько секунд — повторно не нажать */
+    try {
+      const r = await api("admin.lessonSave", { data: data });
+      const fields = { block: data.block, sub: data.sub, title: data.title, kind: data.kind, url: data.url, note: data.note, ready: data.ready, active: data.active };
+      if (l) Object.assign(l, fields); else d.lessons.push(Object.assign({ id: r.id, order: 99999, createdBy: APP.user.id }, fields));
+      close(); PR.program = null; admMaterials(d); toast("Сохранено");
+    } catch (e) { btn.disabled = false; btn.textContent = "Сохранить"; fail(e); }
   };
 }
 
