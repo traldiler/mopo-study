@@ -21,7 +21,7 @@ async function quizData(fresh) {
   return QZ.data;
 }
 async function quizFiles() {
-  if (!QZ.base) QZ.base = APP.demo ? await fetch("data/quiz.json", { cache: "no-store" }).then(r => r.json()) : await api("quiz.data");
+  if (!QZ.base) QZ.base = JSON.parse(await matLoad("data/quiz.json"));
   if (APP.demo && !QZ.key) QZ.key = await fetch("data/quiz_demo_key.json", { cache: "no-store" }).then(r => r.json());
 }
 /* тот же вид «без ответов», что собирает сервер */

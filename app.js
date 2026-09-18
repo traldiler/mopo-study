@@ -575,13 +575,41 @@ async function backToPlace() {
   else if (document.getElementById("nlist")) { await screenNotes(true); window.scrollTo(0, y); }
 }
 
-/* конспекты и схемы не лежат в открытом доступе: сервер отдаёт их только вошедшему, показываем внутри страницы */
+/* ---------- закрытые материалы ----------
+   Конспекты, схемы и банк вопросов лежат на сайте зашифрованными. Ключ кабинет получает у сервера после входа
+   и расшифровывает файлы прямо в браузере — быстро и без лишних запросов. */
+let MAT_KEY = null;
+async function matKey() {
+  if (MAT_KEY) return MAT_KEY;
+  const hex = (await api("mat.key")).key || "";
+  const raw = new Uint8Array(hex.match(/../g).map(h => parseInt(h, 16)));
+  return (MAT_KEY = await crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["decrypt"]));
+}
+async function matLoad(path) {                       /* path: konspekt/dso.html, shemy/index.html, data/quiz.json */
+  if (APP.demo) return fetch(path, { cache: "no-store" }).then(r => r.text());
+  const name = path.replace("data/", "").replace("/", "__") + ".enc";
+  const [key, b64] = await Promise.all([matKey(), fetch("m/" + name, { cache: "force-cache" }).then(r => {
+    if (!r.ok) throw new Error("файл не найден на сайте (" + r.status + ")");
+    return r.text();
+  })]);
+  const bytes = Uint8Array.from(atob(b64.trim()), c => c.charCodeAt(0));
+  const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: bytes.slice(0, 12) }, key, bytes.slice(12));
+  return new TextDecoder().decode(plain);
+}
+/* водяной знак: имя и дата поверх конспекта — чтобы пересылать снимки было неприятно */
+function watermark(html) {
+  const who = esc(APP.user.fio + " · " + new Date().toLocaleDateString("ru-RU"));
+  const wm = `<style>.mopo-wm{position:fixed;right:10px;bottom:8px;z-index:2147483000;pointer-events:none;
+    font:600 10px/1.2 Arial,sans-serif;color:rgba(0,0,0,.20);letter-spacing:.04em}
+    @media print{.mopo-wm{color:rgba(0,0,0,.35)}}</style><div class="mopo-wm">${who}</div>`;
+  return html.includes("</body>") ? html.replace("</body>", wm + "</body>") : html + wm;
+}
 async function loadInner(frame, url) {
   const [path, query] = String(url).split("?");
   const topic = new URLSearchParams(query || "").get("t") || "";
   try {
-    const html = APP.demo ? await fetch(url, { cache: "no-store" }).then(r => r.text()) : (await api("material", { path: path })).html;
-    frame.srcdoc = (topic ? `<script>window.__topic=${JSON.stringify(topic)}<\/script>` : "") + html;
+    const html = await matLoad(path);
+    frame.srcdoc = (topic ? `<script>window.__topic=${JSON.stringify(topic)}<\/script>` : "") + watermark(html);
   } catch (e) {
     frame.srcdoc = `<body style="font:15px/1.5 Arial,sans-serif;color:#232227;padding:24px">Не удалось открыть материал: ${esc(e.message)}<br><br>Обновите страницу и попробуйте ещё раз.</body>`;
   }

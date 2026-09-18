@@ -6,7 +6,7 @@ const LSKEY = () => "mopo-exam-draft-" + (APP.user ? APP.user.id : "x");
 /* исходный экзамен + вопросы тем, добавленные в «Материалах»; разделы идут в порядке блоков программы */
 async function examData() {
   if (EX.data) return EX.data;
-  const d = APP.demo ? await fetch("data/exam.json", { cache: "no-store" }).then(r => r.json()) : await api("exam.data");
+  const d = JSON.parse(await matLoad("data/exam.json"));
   try { if (!PR.program) PR.program = await api("program"); } catch (e) { /* без программы — исходный порядок */ }
   let extra = [], off = new Set();
   let replaced = new Set();
