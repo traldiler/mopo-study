@@ -240,8 +240,12 @@ const KIND = { видео:"▶", конспект:"✎", схема:"◆", тр�
 const PR = { program: null, progress: null, block: null, sub: -1 };
 
 async function loadCabinet(force) {
-  if (!PR.program || force) PR.program = await api("program");
-  PR.progress = await api("progress.get");
+  if (!PR.program || force) {                       /* один запрос вместо трёх: сервер отдаёт программу, прогресс и ключ материалов */
+    const b = await api("boot");
+    PR.program = b.program; PR.progress = b.progress;
+    if (b.mat) MAT_HEX = b.mat;
+    if (b.user) APP.user = Object.assign(APP.user || {}, b.user);
+  } else PR.progress = await api("progress.get");
   try { await quizData(); } catch (e) { /* без описания тестов строки покажут общий текст */ }
   PR.progress.notes = PR.progress.notes || {};
   return PR;
@@ -578,11 +582,12 @@ async function backToPlace() {
 /* ---------- закрытые материалы ----------
    Конспекты, схемы и банк вопросов лежат на сайте зашифрованными. Ключ кабинет получает у сервера после входа
    и расшифровывает файлы прямо в браузере — быстро и без лишних запросов. */
-let MAT_KEY = null;
+let MAT_KEY = null, MAT_HEX = "";
 async function matKey() {
   if (MAT_KEY) return MAT_KEY;
-  const hex = (await api("mat.key")).key || "";
-  const raw = new Uint8Array(hex.match(/../g).map(h => parseInt(h, 16)));
+  const hex = (MAT_HEX || (await api("mat.key")).key || "").trim();
+  if (!/^[0-9a-f]{64}$/i.test(hex)) throw new Error("сервер не дал ключ материалов — обновите код скрипта и разверните новую версию");
+  const raw = new Uint8Array(hex.match(/../g).map(h => parseInt(h, 16)));      /* ключ приходит вместе с программой при входе */
   return (MAT_KEY = await crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["decrypt"]));
 }
 async function matLoad(path) {                       /* path: konspekt/dso.html, shemy/index.html, data/quiz.json */
