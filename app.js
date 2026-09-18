@@ -13,11 +13,24 @@ async function api(action, data) {
     if (r && r.error) throw new Error(r.error);
     return r;
   }
-  const r = await fetch(window.API_URL, {
-    method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body: JSON.stringify(Object.assign({ action: action, token: APP.token }, data || {}))
-  });
-  const j = await r.json();
+  /* сервер Google иногда отвечает сбоем вместо данных — чтение повторяем сами, запись не дублируем */
+  const safe = /^(boot|program|progress\.get|me|my\.questions|mat\.key|quiz\.overrides|exam\.extra|quiz\.review|admin\.(users|students|attempts|attempt|questions|badges|materials|resets|examList|examGet|quizGet))$/.test(action);
+  let j = null;
+  for (let tryN = 0; tryN < (safe ? 3 : 1); tryN++) {
+    try {
+      const r = await fetch(window.API_URL, {
+        method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify(Object.assign({ action: action, token: APP.token }, data || {}))
+      });
+      const txt = await r.text();
+      j = JSON.parse(txt);
+      break;
+    } catch (e) {
+      j = null;
+      if (tryN === (safe ? 2 : 0)) throw new Error("Сервер не ответил — проверьте интернет и попробуйте ещё раз");
+      await new Promise(res => setTimeout(res, 800 * (tryN + 1)));
+    }
+  }
   if (j && j.code === "auth") { logout(true); throw new Error("Сессия истекла — войдите заново"); }
   if (j && j.error) throw new Error(j.error);
   return j;
@@ -242,10 +255,11 @@ const PR = { program: null, progress: null, block: null, sub: -1 };
 async function loadCabinet(force) {
   if (!PR.program || force) {                       /* один запрос вместо трёх: сервер отдаёт программу, прогресс и ключ материалов */
     const b = await api("boot");
-    PR.program = b.program; PR.progress = b.progress;
+    PR.program = b.program; PR.progress = b.progress; PR.bootAt = Date.now(); PR.qOver = b.quizzes || null;
     if (b.mat) MAT_HEX = b.mat;
     if (b.user) APP.user = Object.assign(APP.user || {}, b.user);
-  } else PR.progress = await api("progress.get");
+  } else if (!(PR.bootAt && Date.now() - PR.bootAt < 8000)) PR.progress = await api("progress.get");   /* только что пришло с boot — не дублируем */
+  PR.bootAt = 0;
   try { await quizData(); } catch (e) { /* без описания тестов строки покажут общий текст */ }
   PR.progress.notes = PR.progress.notes || {};
   return PR;
@@ -1435,7 +1449,12 @@ async function examGate() {
 /* ---------- запуск ---------- */
 async function start() {
   try {
-    if (!APP.user) { const r = await api("me"); APP.user = r.user; }
+    if (!APP.user) {                                 /* сразу всё одним запросом: кто вошёл, программа, прогресс, ключ материалов */
+      $("#app").innerHTML = `<div class="card"><p class="lead">Загружаем кабинет…</p></div>`;
+      const b = await api(APP.demo ? "me" : "boot");
+      APP.user = b.user;
+      if (!APP.demo) { PR.program = b.program; PR.progress = b.progress; PR.bootAt = Date.now(); PR.qOver = b.quizzes || null; if (b.mat) MAT_HEX = b.mat; }
+    }
     go(isStaff(APP.user) && staffMode() === "admin" ? "adm:students" : "cabinet");
   } catch (e) { screenLogin(); }
 }

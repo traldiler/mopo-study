@@ -15,7 +15,11 @@ async function quizData(fresh) {
   await quizFiles();
   if (!QZ.data) {
     const data = { quizzes: Object.assign({}, QZ.base.quizzes) };
-    try { Object.assign(data.quizzes, (await api("quiz.overrides")).quizzes || {}); } catch (e) { /* без правок — исходные тесты */ }
+    try {                                             /* правки тестов уже пришли при входе — второй запрос не нужен */
+      const over = !fresh && PR && PR.qOver ? PR.qOver : (await api("quiz.overrides")).quizzes;
+      Object.assign(data.quizzes, over || {});
+      if (fresh && PR) PR.qOver = null;
+    } catch (e) { /* без правок — исходные тесты */ }
     QZ.data = data;
   }
   return QZ.data;
