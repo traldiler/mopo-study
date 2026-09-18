@@ -7,12 +7,42 @@ const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&am
 const APP = { user: null, token: localStorage.getItem("mopo-token") || "", screen: "cabinet", materials: null, demo: !window.API_URL };
 
 /* ---------- обращение к серверу ---------- */
+/* списки кабинета РОПа и разработчика: показываем из памяти сразу, свежие подтягиваем в фоне */
+const SWR = {};
+const SWR_READ = /^admin\.(users|students|attempts|questions|badges|materials|resets|examList)$/;
+function swrRedraw() {
+  const busy = document.querySelector(".modal-back, .viewer") || /INPUT|TEXTAREA|SELECT/.test((document.activeElement || {}).tagName || "");
+  if (busy || !/^adm:/.test(APP.screen || "")) return;
+  const y = window.scrollY; screenAdmin(); setTimeout(() => window.scrollTo(0, y), 30);
+}
 async function api(action, data) {
   if (APP.demo) {                                  /* демо отвечает как сервер: отказ — ошибка, а не «успех» */
     const r = await demoApi(action, data);
     if (r && r.error) throw new Error(r.error);
     return r;
   }
+  const key = action + JSON.stringify(data || {});
+  if (SWR_READ.test(action)) {
+    const c = SWR[key];
+    if (c) {
+      if (Date.now() - c.at > 15000 && !c.busy) {
+        c.busy = true;
+        apiRaw(action, data).then(v => {
+          const changed = JSON.stringify(v) !== JSON.stringify(c.v);
+          SWR[key] = { v: v, at: Date.now() };
+          if (changed) swrRedraw();
+        }).catch(() => { c.busy = false; });
+      }
+      return JSON.parse(JSON.stringify(c.v));
+    }
+    const v = await apiRaw(action, data);
+    SWR[key] = { v: v, at: Date.now() };
+    return JSON.parse(JSON.stringify(v));
+  }
+  if (/^admin\.|^question\./.test(action)) Object.keys(SWR).forEach(k => delete SWR[k]);   /* что-то поменяли — списки перечитаем */
+  return apiRaw(action, data);
+}
+async function apiRaw(action, data) {
   /* сервер Google иногда отвечает сбоем вместо данных — чтение повторяем сами, запись не дублируем */
   const safe = /^(boot|program|progress\.get|me|my\.questions|mat\.key|quiz\.overrides|exam\.extra|quiz\.review|admin\.(users|students|attempts|attempt|questions|badges|materials|resets|examList|examGet|quizGet))$/.test(action);
   let j = null;
@@ -34,6 +64,105 @@ async function api(action, data) {
   if (j && j.code === "auth") { logout(true); throw new Error("Сессия истекла — войдите заново"); }
   if (j && j.error) throw new Error(j.error);
   return j;
+}
+
+
+/* ---------- быстрый режим: копия данных в браузере + очередь сохранений ----------
+   Google отвечает по 3–5 секунд, поэтому кабинет его не ждёт: показывает свою копию сразу,
+   а изменения копит в очереди и отправляет пачкой в фоне. Очередь лежит в браузере — если закрыть вкладку,
+   неотправленное уйдёт при следующем открытии; при закрытии браузер ещё и сам пытается дослать. */
+const OUT = { q: [], busy: false, fail: 0, timer: null }, MYQ = { data: null, at: 0 };
+const REFRESH = { busy: false, at: 0 };
+const outKey = () => "mopo-out-" + (APP.user ? APP.user.id : "x");
+const newId = p => (p || "n") + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+function outLoad() { try { OUT.q = JSON.parse(localStorage.getItem(outKey()) || "[]"); } catch (e) { OUT.q = []; } }
+function outKeep() { try { localStorage.setItem(outKey(), JSON.stringify(OUT.q)); } catch (e) { /* без памяти браузера — только в этой вкладке */ } saveBadge(); }
+function snapKeep() {
+  if (APP.demo || !APP.user || !PR.program) return;
+  try {
+    localStorage.setItem("mopo-snap-" + APP.user.id, JSON.stringify({ user: APP.user, program: PR.program, progress: PR.progress, qOver: PR.qOver || null, mat: MAT_HEX, at: Date.now() }));
+    localStorage.setItem("mopo-last-user", APP.user.id);
+  } catch (e) { /* не страшно */ }
+}
+function snapLoad() {
+  try {
+    const id = localStorage.getItem("mopo-last-user"), s = id && JSON.parse(localStorage.getItem("mopo-snap-" + id) || "null");
+    return s && s.user && s.program && s.progress ? s : null;
+  } catch (e) { return null; }
+}
+function snapDrop() {
+  try { Object.keys(localStorage).filter(k => /^mopo-(snap|last-user)/.test(k)).forEach(k => localStorage.removeItem(k)); } catch (e) { }
+}
+/* применить действие к своей копии — то же, что потом сделает сервер */
+function applyLocal(action, d) {
+  const P = PR.progress; if (!P) return;
+  P.notes = P.notes || {}; P.lessons = P.lessons || {};
+  if (action === "progress") { if (d.done) P.lessons[d.lessonId] = P.lessons[d.lessonId] || new Date().toISOString(); else delete P.lessons[d.lessonId]; }
+  if (action === "note.save") {
+    const list = P.notes[d.lessonId] = P.notes[d.lessonId] || [];
+    if (!list.some(n => n.id === d.id)) list.push({ id: d.id, kind: d.kind || "note", text: d.text || "", time: d.time || "",
+      quote: d.quote || "", color: Number(d.color) || 0, at: new Date().toISOString() });
+  }
+  if (action === "note.del") P.notes[d.lessonId] = (P.notes[d.lessonId] || []).filter(n => n.id !== d.id);
+  if (action === "note.update") (P.notes[d.lessonId] || []).forEach(n => {
+    if (n.id !== d.id) return;
+    if (d.color != null) n.color = Number(d.color);
+    if (d.text != null) n.text = d.text;
+  });
+  if (action === "lesson.open") P.lastLesson = d.lessonId;
+}
+/* сохранить: сразу в копию, в Google — в фоне */
+function save(action, d) {
+  d = Object.assign({}, d);
+  if (action === "note.save" && !d.id) d.id = newId("n");
+  applyLocal(action, d);
+  if (APP.demo) { api(action, d).catch(() => { }); return d; }
+  OUT.q.push({ qid: newId("q"), action: action, data: d });
+  outKeep(); snapKeep(); outFlush();
+  return d;
+}
+async function outFlush() {
+  if (OUT.busy || !OUT.q.length || APP.demo || !APP.token) return;
+  OUT.busy = true; saveBadge();
+  const batch = OUT.q.slice(0, 30);
+  try {
+    const r = await api("batch", { items: batch });
+    const done = new Set((r.results || []).map(x => x.qid));      /* отказ сервера повторять бессмысленно — тоже убираем */
+    OUT.q = OUT.q.filter(x => !done.has(x.qid)); OUT.fail = 0;
+  } catch (e) { OUT.fail++; }
+  OUT.busy = false; outKeep();
+  if (OUT.q.length) { clearTimeout(OUT.timer); OUT.timer = setTimeout(outFlush, OUT.fail ? Math.min(30000, 3000 * OUT.fail) : 50); }
+}
+function saveBadge() {
+  let b = document.getElementById("savebadge");
+  if (!b) { b = el("div", "savebadge"); b.id = "savebadge"; b.setAttribute("role", "status"); document.body.appendChild(b); }
+  b.hidden = !OUT.q.length;
+  b.classList.toggle("bad", !!OUT.fail);
+  b.textContent = OUT.fail ? "Нет связи — сохраним, как только появится" : "Сохраняется…";
+}
+window.addEventListener("beforeunload", e => { if (OUT.q.length && !APP.demo) { e.preventDefault(); e.returnValue = ""; } });
+window.addEventListener("pagehide", () => {
+  if (!OUT.q.length || APP.demo || !navigator.sendBeacon) return;
+  try { navigator.sendBeacon(window.API_URL, new Blob([JSON.stringify({ action: "batch", token: APP.token, items: OUT.q.slice(0, 30) })], { type: "text/plain;charset=utf-8" })); }
+  catch (e) { /* дошлём при следующем открытии */ }
+});
+window.addEventListener("online", () => outFlush());
+/* свежие данные с сервера — тихо, не мешая человеку; то, что ещё в очереди, накладываем сверху */
+async function refreshBg(force) {
+  if (APP.demo || REFRESH.busy || !APP.token) return;
+  if (!force && Date.now() - REFRESH.at < 45000) return;
+  REFRESH.busy = true;
+  try {
+    const b = await api("boot");
+    if (b.user) APP.user = Object.assign(APP.user || {}, b.user);
+    PR.program = b.program; PR.progress = b.progress; PR.qOver = b.quizzes || null; if (b.mat) MAT_HEX = b.mat;
+    OUT.q.forEach(it => applyLocal(it.action, it.data));
+    if (typeof QZ !== "undefined") QZ.data = null;
+    REFRESH.at = Date.now(); snapKeep();
+    const busy = document.querySelector(".viewer, .modal-back") || /INPUT|TEXTAREA|SELECT/.test((document.activeElement || {}).tagName || "");
+    if (!busy && /^(cabinet|notes)$/.test(APP.screen)) { renderNav(); backToPlace(); }
+  } catch (e) { /* нет связи — остаёмся на копии */ }
+  REFRESH.busy = false;
 }
 
 /* ---------- диалоги ---------- */
@@ -174,6 +303,7 @@ async function logout(silent) {
   if (!silent && !await ask({ title: "Выйти из кабинета", ok: "Выйти", text: "Прогресс сохранён — войдёте снова и продолжите." })) return;
   try { await api("logout"); } catch (_) { }
   APP.token = ""; APP.user = null; localStorage.removeItem("mopo-token");
+  snapDrop(); PR.program = null; PR.progress = null; MAT_HEX = ""; MAT_KEY = null;
   screenLogin();
 }
 
@@ -253,13 +383,17 @@ const KIND = { видео:"▶", конспект:"✎", схема:"◆", тр�
 const PR = { program: null, progress: null, block: null, sub: -1 };
 
 async function loadCabinet(force) {
-  if (!PR.program || force) {                       /* один запрос вместо трёх: сервер отдаёт программу, прогресс и ключ материалов */
+  if (APP.demo) {
+    if (!PR.program || force) PR.program = await api("program");
+    PR.progress = await api("progress.get");
+  } else if (!PR.program || !PR.progress || force) {  /* один запрос: программа, прогресс, ключ материалов, правки тестов */
     const b = await api("boot");
-    PR.program = b.program; PR.progress = b.progress; PR.bootAt = Date.now(); PR.qOver = b.quizzes || null;
+    PR.program = b.program; PR.progress = b.progress; PR.qOver = b.quizzes || null;
     if (b.mat) MAT_HEX = b.mat;
     if (b.user) APP.user = Object.assign(APP.user || {}, b.user);
-  } else if (!(PR.bootAt && Date.now() - PR.bootAt < 8000)) PR.progress = await api("progress.get");   /* только что пришло с boot — не дублируем */
-  PR.bootAt = 0;
+    OUT.q.forEach(it => applyLocal(it.action, it.data));
+    REFRESH.at = Date.now(); snapKeep();
+  } else refreshBg();                                  /* копия уже есть — показываем её, свежее подтянем в фоне */
   try { await quizData(); } catch (e) { /* без описания тестов строки покажут общий текст */ }
   PR.progress.notes = PR.progress.notes || {};
   return PR;
@@ -527,9 +661,7 @@ function lessonRow(l) {
     row.appendChild(star);
     const chk = el("button", "chk" + (done ? " on" : ""), done ? "✓" : "");
     chk.type = "button"; chk.title = done ? "Отметить непройденным" : "Отметить пройденным";
-    chk.onclick = async () => {
-      try { await api("progress", { lessonId: l.id, done: !done }); await loadCabinet(); backToPlace(); } catch (e) { fail(e); }
-    };
+    chk.onclick = () => { save("progress", { lessonId: l.id, done: !done }); backToPlace(); };
     row.appendChild(note); row.appendChild(open); row.appendChild(chk);
   } else row.appendChild(el("span", "tag", "скоро"));
   return row;
@@ -577,12 +709,9 @@ const dots = (cur, attr) => MARKERS.slice(1).map((m, i) =>
 
 async function toggleBookmark(l) {
   const bm = notesOf(l.id).filter(n => n.kind === "bm")[0];
-  try {
-    if (bm) await api("note.del", { lessonId: l.id, id: bm.id });
-    else await api("note.save", { lessonId: l.id, kind: "bm", text: l.title });
-    await loadCabinet();
-    toast(bm ? "Убрано из закладок" : "Добавлено в закладки — они в «Моих записях»");
-  } catch (e) { fail(e); }
+  if (bm) save("note.del", { lessonId: l.id, id: bm.id });
+  else save("note.save", { lessonId: l.id, kind: "bm", text: l.title });
+  toast(bm ? "Убрано из закладок" : "Добавлено в закладки — они в «Моих записях»");
 }
 
 /* после закрытия окна — туда же, где его открывали, с той же прокруткой */
@@ -635,7 +764,7 @@ async function loadInner(frame, url) {
 }
 function openLesson(l, at, quote) {
   PR.progress.lastLesson = l.id;
-  api("lesson.open", { lessonId: l.id }).catch(() => {});
+  save("lesson.open", { lessonId: l.id });
   const v = el("div", "viewer split");
   const video = l.kind === "видео", inner = isInternal(l.url), textual = /^konspekt\//.test(String(l.url));
   const src = inner ? l.url : driveEmbed(l.url);
@@ -764,11 +893,9 @@ function openLesson(l, at, quote) {
       v.querySelector('[data-a="clear"]').hidden = false;
     }
     if (d.mopo === "hl") {
-      try {
-        await api("note.save", { lessonId: l.id, kind: "hl", quote: d.text, color: d.color });
-        await loadCabinet(); draw(); showTab("hl"); post({ mopo: "reset", list: marks() });
-        toast("Выделение сохранено");
-      } catch (err) { fail(err); }
+      save("note.save", { lessonId: l.id, kind: "hl", quote: d.text, color: d.color });
+      draw(); showTab("hl"); post({ mopo: "reset", list: marks() });
+      toast("Выделение сохранено");
     }
   };
   if (inner) window.addEventListener("message", onMsg);
@@ -791,19 +918,15 @@ function openLesson(l, at, quote) {
         <div class="ni-foot"><button class="btn small white" data-go="${esc(n.id)}" type="button">Перейти к месту</button>
           <button class="btn small red" data-del="${esc(n.id)}" type="button">Удалить</button></div></div>`).join("")
       : `<p class="hint">${hlAll.length ? "Выделений такого цвета нет." : "Выделений пока нет."}</p>`;
-    v.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
-      try { await api("note.del", { lessonId: l.id, id: b.dataset.del }); await loadCabinet(); draw(); post({ mopo: "reset", list: marks() }); }
-      catch (err) { fail(err); }
+    v.querySelectorAll("[data-del]").forEach(b => b.onclick = () => {
+      save("note.del", { lessonId: l.id, id: b.dataset.del }); draw(); post({ mopo: "reset", list: marks() });
     });
     v.querySelectorAll("[data-go]").forEach(b => b.onclick = () => {
       const n = notesOf(l.id).filter(x => x.id === b.dataset.go)[0];
       if (n && n.quote) post({ mopo: "focus", text: n.quote });
     });
-    v.querySelectorAll("[data-rc]").forEach(b => b.onclick = async () => {
-      try {
-        await api("note.update", { id: b.dataset.rc, lessonId: l.id, color: Number(b.dataset.c) });
-        await loadCabinet(); draw(); post({ mopo: "reset", list: marks() });
-      } catch (err) { fail(err); }
+    v.querySelectorAll("[data-rc]").forEach(b => b.onclick = () => {
+      save("note.update", { id: b.dataset.rc, lessonId: l.id, color: Number(b.dataset.c) }); draw(); post({ mopo: "reset", list: marks() });
     });
   };
   const clearDraft = () => {
@@ -820,11 +943,8 @@ function openLesson(l, at, quote) {
     const ta = v.querySelector(".ntext"), ti = v.querySelector(".ntime");
     const text = ta.value.trim();
     if (!text) { toast("Напишите текст заметки"); return; }
-    try {
-      await api("note.save", { lessonId: l.id, kind: "note", text: text, time: ti ? ti.value.trim() : "", quote: ta.dataset.quote || "" });
-      clearDraft();
-      await loadCabinet(); draw(); post({ mopo: "reset", list: marks() }); toast("Заметка сохранена");
-    } catch (e) { fail(e); }
+    save("note.save", { lessonId: l.id, kind: "note", text: text, time: ti ? ti.value.trim() : "", quote: ta.dataset.quote || "" });
+    clearDraft(); draw(); post({ mopo: "reset", list: marks() }); toast("Заметка сохранена");
   };
   draw(); showTab(textual ? tab : "note");
   document.body.appendChild(v); lockScroll(true);
@@ -869,11 +989,10 @@ function notesFor(l) {
       const text = back.querySelector("#ntext").value.trim();
       const time = back.querySelector("#ntime") ? back.querySelector("#ntime").value.trim() : "";
       if (!text) { toast("Напишите текст заметки"); return; }
-      try { await api("note.save", { lessonId: l.id, kind: "note", text: text, time: time }); await loadCabinet(); drawM(); toast("Заметка сохранена"); }
-      catch (e) { fail(e); }
+      save("note.save", { lessonId: l.id, kind: "note", text: text, time: time }); drawM(); toast("Заметка сохранена");
     };
     back.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
-      try { await api("note.del", { lessonId: l.id, id: b.dataset.del }); await loadCabinet(); drawM(); } catch (e) { fail(e); }
+      save("note.del", { lessonId: l.id, id: b.dataset.del }); drawM();
     });
     back.querySelectorAll("[data-go]").forEach(b => b.onclick = () => {
       const n = notesOf(l.id).filter(x => x.id === b.dataset.go)[0];
@@ -962,7 +1081,17 @@ async function screenQuestions() {
   $("#timer").hidden = true;
   $("#app").innerHTML = `<div class="card"><p class="lead">Загружаем…</p></div>`;
   let r;
-  try { await loadCabinet(); r = await api("my.questions"); } catch (e) { return fail(e); }
+  try {                                              /* вопросы из памяти сразу, свежие — в фоне */
+    await loadCabinet();
+    if (MYQ.data && !APP.demo) {
+      r = MYQ.data;
+      if (Date.now() - MYQ.at > 20000) api("my.questions").then(x => {
+        const changed = JSON.stringify(x) !== JSON.stringify(MYQ.data);
+        MYQ.data = x; MYQ.at = Date.now();
+        if (changed && APP.screen === "questions" && !document.querySelector(".modal-back")) screenQuestions();
+      }).catch(() => { });
+    } else { r = await api("my.questions"); MYQ.data = r; MYQ.at = Date.now(); }
+  } catch (e) { return fail(e); }
   const list = (r.questions || []).slice().sort((a, b) => String(b.at).localeCompare(String(a.at)));
   const nAns = list.filter(q => q.answer).length, nWait = list.length - nAns;
   $("#app").innerHTML = `<div class="card">
@@ -979,7 +1108,7 @@ async function screenQuestions() {
   if (staff) $("#dqsend").onclick = async () => {
     const text = $("#dqtext").value.trim();
     if (text.length < 3) return toast("Напишите вопрос");
-    try { await api("question.ask", { text: text }); toast("Отправлено разработчику"); screenQuestions(); } catch (e) { fail(e); }
+    try { await api("question.ask", { text: text }); MYQ.data = null; toast("Отправлено разработчику"); screenQuestions(); } catch (e) { fail(e); }
   };
   const draw = () => {
     $("#qseg").querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.f === QUI.filter));
@@ -1020,14 +1149,18 @@ async function screenQuestions() {
           box.querySelector("[data-ok]").onclick = async () => {
             const text = ta.value.trim();
             if (text.length < 3) return toast("Напишите вопрос");
-            try { await api("question.edit", { id: q.id, text: text }); q.text = text; draw(); toast("Вопрос изменён"); }
+            try { await api("question.edit", { id: q.id, text: text }); q.text = text; MYQ.at = 0; draw(); toast("Вопрос изменён"); }
             catch (e) { fail(e); }
           };
         };
         del.onclick = async () => {
           if (!await ask({ title: "Удалить вопрос?", danger: true, ok: "Удалить", cancel: "Не удалять",
               text: "Вы уверены, что хотите удалить вопрос? " + (isStaff(APP.user) ? "Разработчик" : "РОП") + " его больше не увидит.<br><br>«" + esc(q.text) + "»" })) return;
-          try { await api("question.del", { id: q.id }); toast("Вопрос удалён"); screenQuestions(); } catch (e) { fail(e); }
+          try {
+            await api("question.del", { id: q.id });
+            if (MYQ.data) MYQ.data.questions = (MYQ.data.questions || []).filter(x => x.id !== q.id);
+            toast("Вопрос удалён"); screenQuestions();
+          } catch (e) { fail(e); }
         };
         right.appendChild(ed); right.appendChild(del); foot.appendChild(right);
       }
@@ -1111,10 +1244,10 @@ async function screenNotes(keep) {
       c.querySelector("[data-in]").onclick = () => { APP.screen = "cabinet"; renderNav(); openBlock(x.ref.block.n, x.ref.lesson.id); };
       c.querySelector("[data-go]").onclick = () => openLesson(x.ref.lesson, x.n.time || null, x.n.quote || null);
       c.querySelector("[data-del]").onclick = async () => {
-        try { await api("note.del", { lessonId: x.id, id: x.n.id }); screenNotes(true); } catch (e) { fail(e); }
+        save("note.del", { lessonId: x.id, id: x.n.id }); screenNotes(true);
       };
       c.querySelectorAll("[data-c]").forEach(b => b.onclick = async () => {
-        try { await api("note.update", { lessonId: x.id, id: x.n.id, color: Number(b.dataset.c) }); screenNotes(true); } catch (e) { fail(e); }
+        save("note.update", { lessonId: x.id, id: x.n.id, color: Number(b.dataset.c) }); screenNotes(true);
       });
       host.appendChild(c);
     });
@@ -1354,7 +1487,7 @@ function askRop(l) {
     const text = back.querySelector("#qtext").value.trim();
     if (!text) { toast("Напишите вопрос"); return; }
     try {
-      await api("question.ask", { lessonId: l.id, lessonTitle: l.title, text: text });
+      await api("question.ask", { lessonId: l.id, lessonTitle: l.title, text: text }); MYQ.data = null;
       back.remove(); lockScroll(false);
       if (isStaff(APP.user)) toast("Вопрос отправлен разработчику");
       else waNotice({ to: "rop", group: PR.progress.waGroup || "", title: "Вопрос отправлен РОПу",
@@ -1449,12 +1582,17 @@ async function examGate() {
 /* ---------- запуск ---------- */
 async function start() {
   try {
-    if (!APP.user) {                                 /* сразу всё одним запросом: кто вошёл, программа, прогресс, ключ материалов */
+    const snap = !APP.demo && !APP.user && snapLoad();
+    if (snap) {                                      /* кабинет открывается сразу с прошлой копии, свежее придёт в фоне */
+      APP.user = snap.user; PR.program = snap.program; PR.progress = snap.progress; PR.qOver = snap.qOver; MAT_HEX = snap.mat || "";
+      outLoad(); OUT.q.forEach(it => applyLocal(it.action, it.data));
+      setTimeout(() => { refreshBg(true); outFlush(); }, 50);
+    } else if (!APP.user) {                          /* первый вход на этом устройстве — всё одним запросом */
       $("#app").innerHTML = `<div class="card"><p class="lead">Загружаем кабинет…</p></div>`;
       const b = await api(APP.demo ? "me" : "boot");
       APP.user = b.user;
-      if (!APP.demo) { PR.program = b.program; PR.progress = b.progress; PR.bootAt = Date.now(); PR.qOver = b.quizzes || null; if (b.mat) MAT_HEX = b.mat; }
-    }
+      if (!APP.demo) { PR.program = b.program; PR.progress = b.progress; PR.qOver = b.quizzes || null; if (b.mat) MAT_HEX = b.mat; REFRESH.at = Date.now(); outLoad(); snapKeep(); outFlush(); }
+    } else if (!APP.demo) { outLoad(); outFlush(); }
     go(isStaff(APP.user) && staffMode() === "admin" ? "adm:students" : "cabinet");
   } catch (e) { screenLogin(); }
 }
@@ -1698,7 +1836,7 @@ async function demoCall(action, d) {
     }
     case "note.save": {
       const st = demoState(); st.notes = st.notes || {};
-      const id = "n" + Date.now();
+      const id = d.id || "n" + Date.now();
       (st.notes[d.lessonId] = st.notes[d.lessonId] || []).push({ id: id, kind: d.kind === "hl" || d.kind === "bm" ? d.kind : "note", text: d.text || "",
         time: d.time || "", quote: d.quote || "", color: Number(d.color) || 0, at: new Date().toISOString() });
       return { ok: true, id: id };
