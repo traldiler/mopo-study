@@ -345,6 +345,7 @@ async function logout(silent) {
   try { await api("logout"); } catch (_) { }
   APP.token = ""; APP.user = null; localStorage.removeItem("mopo-token");
   snapDrop(); PR.program = null; PR.progress = null; MAT_HEX = ""; MAT_KEY = null;
+  try { caches.delete(DOCC); } catch (e) { }
   screenLogin();
 }
 
@@ -795,13 +796,99 @@ function watermark(html) {
     @media print{.mopo-wm{color:rgba(0,0,0,.35)}}</style><div class="mopo-wm">${who}</div>`;
   return html.includes("</body>") ? html.replace("</body>", wm + "</body>") : html + wm;
 }
+/* ---------- документы Google через сервер ----------
+   Документы и таблицы приходят HTML-копией (выделение маркером работает как в конспектах),
+   презентации и PDF — файлом, листаются кликом по краю слайда. Копия хранится в браузере: открывается сразу,
+   а сервер в фоне проверяет, не обновили ли оригинал. */
+function gdocKind(l) {
+  const u = String(l.url || "");
+  if (/docs\.google\.com\/(document|spreadsheets)\//.test(u)) return "html";
+  if (/docs\.google\.com\/presentation\//.test(u)) return "pdf";
+  if (l.kind !== "видео" && /drive\.google\.com\/(file\/d\/|open\?id=)/.test(u)) return "pdf";
+  return "";
+}
+const DOCC = "mopo-docs-v1";
+async function docCacheGet(id) { try { const r = await (await caches.open(DOCC)).match("/__doc/" + encodeURIComponent(id)); return r ? await r.json() : null; } catch (e) { return null; } }
+async function docCachePut(id, v) { try { await (await caches.open(DOCC)).put("/__doc/" + encodeURIComponent(id), new Response(JSON.stringify(v), { headers: { "Content-Type": "application/json" } })); } catch (e) { } }
+const docPage = (text) => `<body style="font:15px/1.5 Arial,sans-serif;color:#232227;padding:28px">${text}</body>`;
+const DOC_CSS = `<style>body{max-width:880px!important;margin:0 auto!important;padding:28px 36px 60px!important;background:#fff}
+  img{max-width:100%!important;height:auto!important} table{max-width:100%}</style>`;
+function docInject(html) {
+  const head = SHIM_JS + HL_CSS + DOC_CSS;
+  let h = /<head[^>]*>/i.test(html) ? html.replace(/<head[^>]*>/i, m => m + head) : head + html;
+  h = h.includes("</body>") ? h.replace("</body>", HL_JS + "</body>") : h + HL_JS;
+  return watermark(h);
+}
+function pdfPage(b64) {
+  return `<!doctype html><html><head><meta charset="utf-8"><style>
+  html,body{margin:0;height:100%;background:#2E2D33;overflow:hidden;font:13px Arial,sans-serif}
+  #st{position:absolute;inset:0 0 46px 0;display:flex;align-items:center;justify-content:center}
+  #pg{position:relative;background:#fff;box-shadow:0 8px 28px rgba(0,0,0,.45)} #pg canvas{display:block}
+  .textLayer{position:absolute;inset:0;overflow:hidden;line-height:1;opacity:1}
+  .textLayer span,.textLayer br{color:transparent;position:absolute;white-space:pre;cursor:text;transform-origin:0 0}
+  .textLayer ::selection{background:rgba(230,96,35,.35)}
+  .nav{position:absolute;top:0;bottom:46px;width:18%;z-index:3;cursor:pointer;display:flex;align-items:center;color:rgba(255,255,255,0);font-size:34px;transition:color .15s}
+  .nav:hover{color:rgba(255,255,255,.75)} .nav.l{left:0;justify-content:flex-start;padding-left:14px} .nav.r{right:0;justify-content:flex-end;padding-right:14px}
+  #bar{position:absolute;left:0;right:0;bottom:0;height:46px;display:flex;align-items:center;justify-content:center;gap:14px;color:#fff}
+  #bar button{background:rgba(255,255,255,.12);border:0;color:#fff;border-radius:999px;padding:7px 14px;font:600 13px Arial;cursor:pointer}
+  #msg{color:#fff;font-size:15px}</style></head><body>
+  <div id="st"><div id="msg">Загружаем…</div></div><div class="nav l" id="prev">‹</div><div class="nav r" id="next">›</div>
+  <div id="bar"><button id="b1">‹ Назад</button><span id="num"></span><button id="b2">Вперёд ›</button></div>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script>(async function(){
+    var W="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    try{ var wt=await (await fetch(W)).text(); pdfjsLib.GlobalWorkerOptions.workerSrc=URL.createObjectURL(new Blob([wt],{type:"text/javascript"})); }
+    catch(e){ pdfjsLib.GlobalWorkerOptions.workerSrc=W; }
+    var raw=atob("${b64}"), u=new Uint8Array(raw.length); for(var i=0;i<raw.length;i++) u[i]=raw.charCodeAt(i);
+    var pdf=await pdfjsLib.getDocument({data:u}).promise, cur=1, busy=false, st=document.getElementById("st");
+    async function show(n){
+      if(busy||n<1||n>pdf.numPages) return; busy=true; cur=n;
+      var page=await pdf.getPage(n), v1=page.getViewport({scale:1});
+      var s=Math.min((st.clientWidth-24)/v1.width,(st.clientHeight-24)/v1.height), dpr=window.devicePixelRatio||1;
+      var vp=page.getViewport({scale:s}), hv=page.getViewport({scale:s*dpr});
+      var box=document.createElement("div"); box.id="pg"; box.style.width=vp.width+"px"; box.style.height=vp.height+"px";
+      var c=document.createElement("canvas"); c.width=hv.width; c.height=hv.height; c.style.width=vp.width+"px"; c.style.height=vp.height+"px";
+      box.appendChild(c); await page.render({canvasContext:c.getContext("2d"),viewport:hv,intent:"print"}).promise;
+      var tl=document.createElement("div"); tl.className="textLayer"; tl.style.setProperty("--scale-factor",s); box.appendChild(tl);
+      try{ await pdfjsLib.renderTextLayer({textContentSource:await page.getTextContent(),container:tl,viewport:vp}).promise; }catch(e){}
+      st.innerHTML=""; st.appendChild(box); document.getElementById("num").textContent=n+" / "+pdf.numPages; busy=false;
+    }
+    document.getElementById("prev").onclick=document.getElementById("b1").onclick=function(){show(cur-1)};
+    document.getElementById("next").onclick=document.getElementById("b2").onclick=function(){show(cur+1)};
+    document.addEventListener("keydown",function(e){ if(e.key==="ArrowLeft"||e.key==="PageUp") show(cur-1); if(e.key==="ArrowRight"||e.key==="PageDown"||e.key===" ") show(cur+1); });
+    window.addEventListener("resize",function(){ var n=cur; busy=false; show(n); });
+    show(1);
+  })().catch(function(e){ document.getElementById("st").innerHTML='<div id="msg">Не удалось показать файл: '+e.message+'</div>'; });<\/script></body></html>`;
+}
+function renderDoc(frame, r) {
+  frame.srcdoc = r.kind === "html" ? docInject(r.html) : watermark(pdfPage(r.pdf));
+}
+async function loadDoc(frame, l) {
+  const cached = await docCacheGet(l.id);
+  if (cached) renderDoc(frame, cached);
+  else frame.srcdoc = docPage("Загружаем документ… В первый раз это несколько секунд, дальше он откроется сразу.");
+  try {
+    const r = await api("doc.get", { lessonId: l.id, have: cached ? cached.mt : "" });
+    if (r.same) return;
+    await docCachePut(l.id, r);
+    if (!frame.isConnected) return;
+    renderDoc(frame, r);
+    if (cached) toast("Документ обновили — показываем свежую версию");
+  } catch (e) { if (!cached && frame.isConnected) frame.srcdoc = docPage("Не удалось открыть документ: " + esc(e.message)); }
+}
 async function loadInner(frame, url) {
   const [path, query] = String(url).split("?");
   const topic = new URLSearchParams(query || "").get("t") || "";
   try {
     const html = await matLoad(path);
-    /* страница показана «изнутри» кабинета: якоря оглавления и история браузера иначе уводят на сам кабинет */
-    const shim = `<script>(function(){
+    const shim = SHIM_JS;
+    frame.srcdoc = shim + (topic ? `<script>window.__topic=${JSON.stringify(topic)}<\/script>` : "") + watermark(html);
+  } catch (e) {
+    frame.srcdoc = `<body style="font:15px/1.5 Arial,sans-serif;color:#232227;padding:24px">Не удалось открыть материал: ${esc(e.message)}<br><br>Обновите страницу и попробуйте ещё раз.</body>`;
+  }
+}
+/* страница показана «изнутри» кабинета: якоря оглавления и история браузера иначе уводят на сам кабинет */
+const SHIM_JS = `<script>(function(){
       var r=history.replaceState.bind(history),p=history.pushState.bind(history);
       history.replaceState=function(){try{r.apply(null,arguments)}catch(e){}};
       history.pushState=function(){try{p.apply(null,arguments)}catch(e){}};
@@ -814,11 +901,6 @@ async function loadInner(frame, url) {
         if(/^https?:/i.test(h)){ e.preventDefault(); window.open(h,"_blank","noopener"); }
       },true);
     })();<\/script>`;
-    frame.srcdoc = shim + (topic ? `<script>window.__topic=${JSON.stringify(topic)}<\/script>` : "") + watermark(html);
-  } catch (e) {
-    frame.srcdoc = `<body style="font:15px/1.5 Arial,sans-serif;color:#232227;padding:24px">Не удалось открыть материал: ${esc(e.message)}<br><br>Обновите страницу и попробуйте ещё раз.</body>`;
-  }
-}
 function openLesson(l, at, quote) {
   PR.progress.lastLesson = l.id;
   LOC.l = l.id;
@@ -833,18 +915,20 @@ function openLesson(l, at, quote) {
     return;
   }
   const v = el("div", "viewer split");
-  const video = l.kind === "видео", inner = isInternal(l.url), textual = /^konspekt\//.test(String(l.url));
+  const gk = APP.demo ? "" : gdocKind(l), proxied = !!gk;                 /* документ Google — копией через сервер */
+  const video = l.kind === "видео", inner = isInternal(l.url), framed = inner || proxied;
+  const textual = /^konspekt\//.test(String(l.url)) || gk === "html";
   const slides = /docs\.google\.com\/presentation\//.test(String(l.url));
   const src = inner ? l.url : driveEmbed(l.url);
   let tab = quote && notesOf(l.id).some(n => isHl(n) && n.quote === quote) ? "hl" : "note";
   v.innerHTML = `<div class="vhead"><b>${esc(l.title)}</b>
-      ${inner ? "" : '<button type="button" data-a="newtab" class="quiet">Открыть в новой вкладке ↗</button>'}
+      ${framed ? "" : '<button type="button" data-a="newtab" class="quiet">Открыть в новой вкладке ↗</button>'}
       <button type="button" data-a="notes" class="on first">Заметки</button>
       <button type="button" data-a="ask">${isStaff(APP.user) ? "Вопрос разработчику" : "Спросить РОПа"}</button>
       <button type="button" data-a="bm" class="bm"></button>
       <button type="button" data-a="close">Закрыть</button></div>
     <div class="vbody">
-      <iframe ${inner ? "" : `src="${esc(src)}"`} allow="autoplay; fullscreen" ${inner ? "" : 'referrerpolicy="no-referrer"'}></iframe>
+      <iframe ${framed ? "" : `src="${esc(src)}"`} allow="autoplay; fullscreen" ${framed ? "" : 'referrerpolicy="no-referrer"'}></iframe>
       <aside class="vnotes">
         ${textual ? `<div class="seg"><button type="button" data-tab="note">Заметки <i></i></button><button type="button" data-tab="hl">Выделения <i></i></button></div>`
                   : "<h4>Заметки к материалу</h4>"}
@@ -857,7 +941,8 @@ function openLesson(l, at, quote) {
             </div>
             <p class="hint tiny">Счётчик идёт по вашим кликам по видео: Google Диск не сообщает, на какой минуте плеер. Пока видео грузится и после перемотки время может разойтись — поправьте его в поле вручную.</p>` : ""}
           ${textual ? '<p class="hint tiny">Выделите фразу в конспекте: цветной маркер — в «Выделения», кнопка «Заметка» — сюда.</p>' : ""}
-          ${slides ? '<p class="hint tiny">Текст со слайдов скопировать нельзя — Google показывает их картинками. Листайте стрелками ← → на клавиатуре или под слайдом.</p>'
+          ${gk === "pdf" ? '<p class="hint tiny">Листайте кликом по левому или правому краю, кнопками внизу или стрелками ← →. Текст на слайде можно выделить и скопировать в заметку.</p>'
+            : slides ? '<p class="hint tiny">Текст со слайдов скопировать нельзя — Google показывает их картинками. Листайте стрелками ← → на клавиатуре или под слайдом.</p>'
             : !textual && !video ? '<p class="hint tiny">Маркер и цитаты по выделению работают только в конспектах. Здесь нужную фразу скопируйте (⌘C) и вставьте в заметку.</p>' : ""}
           <textarea class="ntext" placeholder="Пишите прямо во время просмотра — окно не закрывается"></textarea>
           <div class="nbtns"><button class="btn" data-a="save" type="button">Сохранить заметку</button>
@@ -979,7 +1064,7 @@ function openLesson(l, at, quote) {
       toast("Выделение сохранено");
     }
   };
-  if (inner) window.addEventListener("message", onMsg);
+  if (framed) window.addEventListener("message", onMsg);
 
   const draw = () => {
     const all = notesOf(l.id).slice().reverse(), notes = all.filter(n => n.kind !== "hl" && n.kind !== "bm"), hlAll = all.filter(isHl), hls = hlAll.filter(hfOk);
@@ -1030,6 +1115,7 @@ function openLesson(l, at, quote) {
   draw(); showTab(textual ? tab : "note");
   document.body.appendChild(v); lockScroll(true);
   if (inner) loadInner(v.querySelector("iframe"), l.url);
+  else if (proxied) loadDoc(v.querySelector("iframe"), l);
 }
 
 /* ---------- переход к материалу по id ---------- */

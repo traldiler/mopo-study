@@ -1586,3 +1586,4 @@ label.f{font-family:var(--f-text); font-size:13px; font-weight:600; letter-spaci
 .pending::after{content:attr(data-pend); position:absolute; right:8px; top:50%; transform:translateY(-50%); font-size:12px; font-weight:700;
   color:var(--graphite, #232227); background:#fff; padding:3px 10px; border-radius:999px; box-shadow:0 2px 8px rgba(0,0,0,.12);}
 .mrow span.mst, .mhead span.mst{flex:0 0 auto; width:auto; font-size:11px; line-height:1.4;}
+.drv p{margin:8px 0;} .drv ul{margin:6px 0 0; padding-left:18px; font-size:13px;} .drv .note{margin:8px 0;}

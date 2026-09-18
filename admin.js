@@ -859,7 +859,14 @@ async function admSettings() {
     <input type="text" id="wagroup" value="${esc((PR.progress && PR.progress.waGroup) || "")}" placeholder="https://chat.whatsapp.com/…">
     <p class="hint tiny">Кабинет скопирует готовый текст и откроет эту группу. Ссылку берут в WhatsApp: группа → «Пригласить по ссылке».
       Её увидит только тот, кто ввёл существующий логин. Если ссылка утечёт — сбросьте её там же и вставьте новую.</p>
-    <div class="foot"><button class="btn" id="csave" type="button">Сохранить</button></div></div>`;
+    <div class="foot"><button class="btn" id="csave" type="button">Сохранить</button></div></div>
+    <div class="card" id="drvcard"><h2>Доступ сервиса к материалам</h2>
+      <p class="lead">Документы, таблицы и презентации сотрудники смотрят через кабинет — копией для чтения, без входа в Google.
+        Для этого у почты, от которой работает кабинет, должен быть доступ к файлам. Видео Google Диск через кабинет не пропускает —
+        их открываем «по ссылке, только просмотр» одной кнопкой.</p>
+      <div class="foot"><button class="btn white" id="drvcheck" type="button">Проверить доступ к файлам</button></div>
+      <div id="drvres"></div></div>`;
+  $("#drvcheck").onclick = () => drvStatus();
   $("#csave").onclick = async () => {
     const g = $("#wagroup").value.trim();
     if (g && !/^https:\/\/chat\.whatsapp\.com\/\S+$/.test(g)) return toast("Ссылка на группу должна начинаться с https://chat.whatsapp.com/");
@@ -869,4 +876,39 @@ async function admSettings() {
       toast("Сохранено");
     } catch (e) { fail(e); }
   };
+}
+
+/* доступ сервиса к файлам программы: чего не хватает и кнопки для видео */
+async function drvStatus() {
+  const box = $("#drvres"), btn = $("#drvcheck");
+  btn.disabled = true; btn.textContent = "Проверяем… до минуты";
+  let r;
+  try { r = await api("admin.driveStatus"); } catch (e) { btn.disabled = false; btn.textContent = "Проверить доступ к файлам"; return fail(e); }
+  btn.disabled = false; btn.textContent = "Проверить ещё раз";
+  const docs = r.files.filter(f => !f.video), vids = r.files.filter(f => f.video);
+  const noDoc = docs.filter(f => !f.ok), noVid = vids.filter(f => !f.ok || !f.canEdit);
+  const open = vids.filter(f => f.ok && f.access === "ANYONE_WITH_LINK").length;
+  const dev = APP.user.role === "dev";
+  box.innerHTML = `<div class="drv">
+    <p>Кабинет работает от почты <b class="inl">${esc(r.account)}</b>.</p>
+    <p><b class="inl">Документы, таблицы, презентации:</b> ${docs.length - noDoc.length} из ${docs.length} доступны.</p>
+    ${noDoc.length ? `<div class="note warn">Нет доступа к ${plural(noDoc.length, "файлу", "файлам", "файлам")} — откройте их для ${esc(r.account)} с правом «Читатель»
+      (проще всего — всю папку с материалами разом):<ul>${noDoc.map(f => `<li>${esc(f.title)}</li>`).join("")}</ul></div>` : ""}
+    <p><b class="inl">Видео:</b> ${vids.length} в программе, открыто по ссылке — ${open}.</p>
+    ${noVid.length ? `<div class="note warn">Кнопка не сможет управлять ${plural(noVid.length, "видео", "видео", "видео")}: у ${esc(r.account)} нет права «Редактор».
+      Дайте его на папку с видео:<ul>${noVid.map(f => `<li>${esc(f.title)}</li>`).join("")}</ul></div>` : ""}
+    ${dev ? `<div class="foot"><button class="btn green" id="vopen" type="button">Открыть видео по ссылке</button>
+      <button class="btn white" id="vclose" type="button">Закрыть видео</button></div>
+      <p class="hint tiny">«Открыть» — все видео программы смотрятся по ссылке, только просмотр. Ссылки видят лишь те, кто вошёл в кабинет.
+        «Закрыть» — снова только для вас. Чтобы кнопка ещё и запрещала скачивание, в редакторе скрипта добавьте сервис: «Сервисы» → «+» → Drive API.</p>` : ""}
+  </div>`;
+  const va = async open => {
+    const b = $(open ? "#vopen" : "#vclose"); b.disabled = true; b.textContent = open ? "Открываем…" : "Закрываем…";
+    try {
+      const x = await api("admin.videoAccess", { open: open });
+      toast((open ? "Открыто видео: " : "Закрыто видео: ") + x.done + (x.fail.length ? ", не вышло: " + x.fail.length : "") + (open && !x.noDownload ? ". Скачивание не запрещено — подключите Drive API" : ""));
+      drvStatus();
+    } catch (e) { fail(e); b.disabled = false; }
+  };
+  if (dev) { $("#vopen").onclick = () => va(true); $("#vclose").onclick = () => va(false); }
 }
