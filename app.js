@@ -13,7 +13,10 @@ const SWR_READ = /^admin\.(users|students|attempts|attempt|questions|badges|mate
 function swrRedraw() {
   const busy = document.querySelector(".modal-back, .viewer") || /INPUT|TEXTAREA|SELECT/.test((document.activeElement || {}).tagName || "");
   if (busy || !/^adm:/.test(APP.screen || "")) return;
-  const y = window.scrollY; screenAdmin(); setTimeout(() => window.scrollTo(0, y), 30);
+  const y = window.scrollY;
+  if (ADM.tab === "materials" && $("#ltbl")) admMaterials();          /* список остаётся на экране, пока готовится новый */
+  else screenAdmin();
+  setTimeout(() => window.scrollTo(0, y), 30);
 }
 async function api(action, data) {
   if (APP.demo) {                                  /* демо отвечает как сервер: отказ — ошибка, а не «успех» */
@@ -194,9 +197,11 @@ async function refreshBg(force) {
   if (!force && Date.now() - REFRESH.at < 45000) return;
   REFRESH.busy = true;
   try {
+    const before = JSON.stringify([PR.program, PR.progress]);
     applyBoot(await api("boot"));
+    const changed = before !== JSON.stringify([PR.program, PR.progress]);        /* ничего нового — экран не трогаем */
     const busy = document.querySelector(".viewer, .modal-back") || /INPUT|TEXTAREA|SELECT/.test((document.activeElement || {}).tagName || "");
-    if (!busy && /^(cabinet|notes)$/.test(APP.screen)) { renderNav(); backToPlace(); }
+    if (changed && !busy && /^(cabinet|notes)$/.test(APP.screen)) { renderNav(); backToPlace(); }
   } catch (e) { /* нет связи — остаёмся на копии */ }
   REFRESH.busy = false;
 }
@@ -816,10 +821,12 @@ async function loadInner(frame, url) {
 }
 function openLesson(l, at, quote) {
   PR.progress.lastLesson = l.id;
+  LOC.l = l.id;
   save("lesson.open", { lessonId: l.id });
   /* сайты, которые запрещают показывать себя внутри чужих страниц, — сразу отдельной вкладкой.
      Авито и Дром разрешают — они открываются внутри, с заметками сбоку и кнопкой «в новой вкладке» */
   if (l.kind === "сайт" && NOFRAME.test(String(l.url))) {
+    LOC.l = null;
     const w = window.open(l.url, "_blank");
     if (w) { try { w.opener = null; } catch (e) { } toast("Сайт открыт в новой вкладке"); }
     else toast("Браузер не дал открыть вкладку — разрешите всплывающие окна для этого сайта");
@@ -870,6 +877,7 @@ function openLesson(l, at, quote) {
   const post = msg => { try { frame().postMessage(msg, "*"); } catch (e) { /* ещё грузится */ } };
 
   const close = () => {
+    LOC.l = null;
     v.remove(); lockScroll(false); window.removeEventListener("message", onMsg);
     if (tick) clearInterval(tick);
     if (watchFocus) window.removeEventListener("blur", watchFocus);
@@ -1653,6 +1661,33 @@ async function examGate() {
 }
 
 /* ---------- запуск ---------- */
+/* ---------- где человек сейчас: вкладка, блок, тема, открытый материал — в адресе страницы, чтобы обновление вернуло туда же ---------- */
+const LOC = { l: null };
+function locSave() {
+  if (!APP.user) return;
+  const q = new URLSearchParams();
+  if (APP.screen) q.set("s", APP.screen);
+  if (APP.screen === "cabinet" && PR.block != null && document.getElementById("subs")) { q.set("b", PR.block); if (PR.sub != null) q.set("u", PR.sub); }
+  if (LOC.l) q.set("l", LOC.l);
+  const h = "#" + q.toString();
+  if (location.hash !== h) try { history.replaceState(null, "", h); } catch (e) { /* не страшно */ }
+}
+document.addEventListener("click", () => setTimeout(locSave, 80), true);
+async function locRestore() {
+  const q = new URLSearchParams(location.hash.slice(1)), sc = q.get("s") || "";
+  const staff = isStaff(APP.user);
+  if (/^adm:/.test(sc) && staff) { go(sc); return true; }
+  if (/^(notes|questions|exam|profile)$/.test(sc)) { go(sc); return true; }
+  if (sc === "cabinet") {
+    APP.screen = "cabinet"; if (staff) try { localStorage.setItem(modeKey(), "mopo"); } catch (e) { }
+    renderNav(); await screenCabinet();
+    const b = q.get("b"), u = q.get("u"), l = q.get("l");
+    if (b != null && PR.program.blocks.some(x => String(x.n) === String(b))) openBlock(Number(b), null, u != null ? Number(u) : undefined);
+    if (l) openLessonById(l);
+    return true;
+  }
+  return false;
+}
 async function start() {
   try {
     const snap = !APP.demo && !APP.user && snapLoad();
@@ -1668,7 +1703,8 @@ async function start() {
       if (!APP.demo) { outLoad(); applyBoot(b); outFlush(); }
     } else if (!APP.demo) { outLoad(); outFlush(); }
     if (!APP.demo && isStaff(APP.user)) setTimeout(() => adminPrefetch(), 1500);
-    go(isStaff(APP.user) && staffMode() === "admin" ? "adm:students" : "cabinet");
+    if (!(await locRestore().catch(() => false))) go(isStaff(APP.user) && staffMode() === "admin" ? "adm:students" : "cabinet");
+    locSave();
   } catch (e) { screenLogin(); }
 }
 document.addEventListener("DOMContentLoaded", () => { APP.token ? start() : screenLogin(); });
