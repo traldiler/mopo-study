@@ -802,12 +802,12 @@ function watermark(html) {
    а сервер в фоне проверяет, не обновили ли оригинал. */
 function gdocKind(l) {
   const u = String(l.url || "");
-  if (/docs\.google\.com\/(document|spreadsheets)\//.test(u)) return "html";
+  if (/docs\.google\.com\/(document|spreadsheets)\//.test(u)) return "doc";
   if (/docs\.google\.com\/presentation\//.test(u)) return "pdf";
   if (l.kind !== "видео" && /drive\.google\.com\/(file\/d\/|open\?id=)/.test(u)) return "pdf";
   return "";
 }
-const DOCC = "mopo-docs-v3";                           /* v2: таблицы 1 в 1 и кликабельное оглавление — старые копии не берём */
+const DOCC = "mopo-docs-v5";                           /* v2: таблицы 1 в 1 и кликабельное оглавление — старые копии не берём */
 async function docCacheGet(id) { try { const r = await (await caches.open(DOCC)).match("/__doc/" + encodeURIComponent(id)); return r ? await r.json() : null; } catch (e) { return null; } }
 async function docCachePut(id, v) { try { await (await caches.open(DOCC)).put("/__doc/" + encodeURIComponent(id), new Response(JSON.stringify(v), { headers: { "Content-Type": "application/json" } })); } catch (e) { } }
 const docPage = (text) => `<body style="font:15px/1.5 Arial,sans-serif;color:#232227;padding:28px">${text}</body>`;
@@ -874,13 +874,112 @@ function pdfPage(b64) {
     show(1);
   })().catch(function(e){ document.getElementById("st").innerHTML='<div id="msg">Не удалось показать файл: '+e.message+'</div>'; });<\/script></body></html>`;
 }
+/* документ и таблица: страницы PDF одна под другой, прокрутка колесом, масштаб − / +,
+   оглавление и ссылки внутри документа кликабельны, текст выделяется и копируется */
+function pdfScroll(b64, toc) {
+  const TOCJ = JSON.stringify(toc || []).replace(/</g, "\\u003c");
+  return `<!doctype html><html><head><meta charset="utf-8"><style>
+  html,body{margin:0;height:100%;background:#E9E8E5;font:13px Arial,sans-serif}
+  #sc{position:absolute;inset:0 0 44px 0;overflow:auto} body.side #sc{left:280px}
+  #side{position:absolute;left:0;top:0;bottom:44px;width:280px;overflow:auto;background:#fff;border-right:1px solid #E0DED9;box-sizing:border-box;padding:14px 10px 30px;display:none}
+  body.side #side{display:block} #side h4{margin:2px 8px 10px;font:700 12px Arial;letter-spacing:.04em;text-transform:uppercase;color:#6D6B72}
+  #side a{display:block;padding:6px 8px;border-radius:8px;color:#232227;text-decoration:none;font-size:13px;line-height:1.3;cursor:pointer}
+  #side a:hover{background:#F2F1EF} #side a.on{background:#FBE7DC;color:#C84E17;font-weight:600} #side a.nf{color:#9B99A0}
+  #side a.l2{padding-left:20px} #side a.l3{padding-left:32px;font-size:12.5px} #side a.l4{padding-left:44px;font-size:12px} #pages{padding:16px 0 30px}
+  .pg{position:relative;margin:0 auto 14px;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.18)} .pg canvas{display:block;position:absolute;inset:0}
+  .textLayer{position:absolute;inset:0;overflow:hidden;line-height:1;opacity:1;z-index:1}
+  .textLayer span,.textLayer br{color:transparent;position:absolute;white-space:pre;cursor:text;transform-origin:0 0}
+  .textLayer ::selection{background:rgba(230,96,35,.35)}
+  .lk{position:absolute;z-index:2;cursor:pointer} .lk:hover{background:rgba(230,96,35,.12)}
+  #bar{position:absolute;left:0;right:0;bottom:0;height:44px;display:flex;align-items:center;justify-content:center;gap:10px;background:#232227;color:#fff}
+  #bar button{background:rgba(255,255,255,.14);border:0;color:#fff;border-radius:999px;padding:6px 14px;font:600 13px Arial;cursor:pointer}
+  #zv{min-width:46px;text-align:center} #num{opacity:.75;margin-left:10px}
+  #msg{padding:40px;text-align:center;color:#232227;font-size:15px}</style></head><body>
+  <div id="side"><h4>Оглавление</h4><div id="toc"></div></div><div id="sc"><div id="pages"><div id="msg">Загружаем…</div></div></div>
+  <div id="bar"><button id="tg" style="display:none">☰ Оглавление</button><button id="zm">−</button><span id="zv">100%</span><button id="zp">+</button><button id="zf">По ширине</button><span id="num"></span></div>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script>(async function(){
+    var W="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    try{ var wt=await (await fetch(W)).text(); pdfjsLib.GlobalWorkerOptions.workerSrc=URL.createObjectURL(new Blob([wt],{type:"text/javascript"})); }
+    catch(e){ pdfjsLib.GlobalWorkerOptions.workerSrc=W; }
+    var raw=atob("${b64}"), u=new Uint8Array(raw.length); for(var i=0;i<raw.length;i++) u[i]=raw.charCodeAt(i);
+    var pdf=await pdfjsLib.getDocument({data:u}).promise, sc=document.getElementById("sc"), wrap=document.getElementById("pages");
+    var pages=[], z=1, fit=1, gen=0, TOC=${TOCJ}, marks=[];
+    for(var n=1;n<=pdf.numPages;n++){ var p=await pdf.getPage(n); pages.push({p:p,v:p.getViewport({scale:1})}); }
+    function fitScale(){ var w=0; pages.forEach(function(x){ w=Math.max(w,x.v.width); }); return Math.min(1.6,(sc.clientWidth-32)/w); }
+    async function draw(i,g){
+      var x=pages[i]; if(x.done===g) return; x.done=g;
+      var s=fit*z, dpr=window.devicePixelRatio||1, vp=x.p.getViewport({scale:s}), hv=x.p.getViewport({scale:s*dpr}), box=x.box;
+      var c=document.createElement("canvas"); c.width=hv.width; c.height=hv.height; c.style.width=vp.width+"px"; c.style.height=vp.height+"px";
+      await x.p.render({canvasContext:c.getContext("2d"),viewport:hv,intent:"print"}).promise; if(g!==gen) return;
+      box.innerHTML=""; box.appendChild(c);
+      var tl=document.createElement("div"); tl.className="textLayer"; tl.style.setProperty("--scale-factor",s); box.appendChild(tl);
+      try{ await pdfjsLib.renderTextLayer({textContentSource:await x.p.getTextContent(),container:tl,viewport:vp}).promise; }catch(e){}
+      try{ (await x.p.getAnnotations()).forEach(function(a){
+        if(a.subtype!=="Link"||(!a.url&&!a.dest)) return;
+        var r=vp.convertToViewportRectangle(a.rect), d=document.createElement("div"); d.className="lk";
+        d.style.left=Math.min(r[0],r[2])+"px"; d.style.top=Math.min(r[1],r[3])+"px";
+        d.style.width=Math.abs(r[2]-r[0])+"px"; d.style.height=Math.abs(r[3]-r[1])+"px";
+        d.title=a.url?"Открыть ссылку":"Перейти к разделу";
+        d.onclick=function(){ a.url?window.open(a.url,"_blank","noopener"):go(a.dest); }; box.appendChild(d); }); }catch(e){}
+    }
+    async function go(dest){
+      try{ if(typeof dest==="string") dest=await pdf.getDestination(dest); var i=await pdf.getPageIndex(dest[0]), x=pages[i];
+        var y=0; if(dest[1]&&dest[1].name==="XYZ"&&dest[3]!=null){ var vp=x.p.getViewport({scale:fit*z}); y=vp.convertToViewportPoint(0,dest[3])[1]; }
+        sc.scrollTop=x.box.offsetTop+y-10; }catch(e){}
+    }
+    var io=new IntersectionObserver(function(es){ es.forEach(function(e){ if(e.isIntersecting) draw(+e.target.dataset.i,gen); }); },{root:sc,rootMargin:"600px 0px"});
+    function layout(){
+      gen++; var s=fit*z, top=sc.scrollTop/(sc.scrollHeight||1); wrap.innerHTML=""; io.disconnect();
+      pages.forEach(function(x,i){ var b=document.createElement("div"); b.className="pg"; b.dataset.i=i;
+        b.style.width=x.v.width*s+"px"; b.style.height=x.v.height*s+"px"; x.box=b; x.done=0; wrap.appendChild(b); io.observe(b); });
+      sc.scrollTop=top*sc.scrollHeight; document.getElementById("zv").textContent=Math.round(z*100)+"%";
+    }
+    function num(){ var m=sc.scrollTop+sc.clientHeight/3, k=1; pages.forEach(function(x,i){ if(x.box&&x.box.offsetTop<=m) k=i+1; });
+      document.getElementById("num").textContent="стр. "+k+" / "+pages.length; }
+    sc.addEventListener("scroll",num);
+    document.getElementById("zm").onclick=function(){ z=Math.max(.5,Math.round((z-.1)*10)/10); layout(); };
+    document.getElementById("zp").onclick=function(){ z=Math.min(3,Math.round((z+.1)*10)/10); layout(); };
+    document.getElementById("zf").onclick=function(){ z=1; fit=fitScale(); layout(); };
+    var rt; window.addEventListener("resize",function(){ clearTimeout(rt); rt=setTimeout(function(){ fit=fitScale(); layout(); },200); });
+    /* оглавление слева, как в Google Документах: заголовки ищем в тексте страниц */
+    var norm=function(t){ return String(t||"").toLowerCase().replace(/ё/g,"е").replace(/[^a-zа-я0-9]+/g,""); };
+    async function buildToc(){
+      if(!TOC.length){ try{ var ol=await pdf.getOutline(); (function walk(a,l){ (a||[]).forEach(function(o){ TOC.push({t:o.title,l:Math.min(4,l),dest:o.dest}); walk(o.items,l+1); }); })(ol,1); }catch(e){} }
+      if(!TOC.length) return;
+      var txt=[]; for(var i=0;i<pages.length;i++){ var its=(await pages[i].p.getTextContent()).items, S="", own=[];
+        its.forEach(function(it,k){ var n=norm(it.str); S+=n; for(var j=0;j<n.length;j++) own.push(k); }); txt.push({S:S,own:own,its:its}); }
+      var hits=TOC.map(function(h){ if(h.dest) return []; var key=norm(h.t).slice(0,80), r=[]; if(key.length<2) return r;
+        txt.forEach(function(T,pi){ var at=T.S.indexOf(key); while(at>=0){ var it=T.its[T.own[at]]; r.push({p:pi,y:it.transform[5],h:Math.abs(it.transform[3])||it.height||0}); at=T.S.indexOf(key,at+1); } }); return r; });
+      var per={}; hits.forEach(function(r){ var seen={}; r.forEach(function(x){ if(!seen[x.p]){ seen[x.p]=1; per[x.p]=(per[x.p]||0)+1; } }); });
+      var tocPage=-1, mx=2; Object.keys(per).forEach(function(k){ if(per[k]>mx){ mx=per[k]; tocPage=+k; } });
+      var box=document.getElementById("toc");
+      TOC.forEach(function(h,i){
+        var r=hits[i], hm=Math.max.apply(null,r.map(function(x){return x.h;}).concat([0])), c=r.filter(function(x){ return x.h>=hm-0.5; });
+        if(c.length>1) c=c.filter(function(x){ return x.p!==tocPage; }).concat(c.filter(function(x){ return x.p===tocPage; }));
+        var m=c[0], a=document.createElement("a"); a.textContent=h.t; a.className="l"+(h.l||1)+(m||h.dest?"":" nf");
+        a.onclick=function(){ if(h.dest) go(h.dest); else if(m){ var x=pages[m.p], vp=x.p.getViewport({scale:fit*z}); sc.scrollTop=x.box.offsetTop+vp.convertToViewportPoint(0,m.y+m.h)[1]-12; } };
+        box.appendChild(a); if(m) marks.push({a:a,m:m});
+      });
+      var tg=document.getElementById("tg"); tg.style.display="";
+      tg.onclick=function(){ document.body.classList.toggle("side"); fit=fitScale(); layout(); };
+      if(window.innerWidth>760){ document.body.classList.add("side"); fit=fitScale(); layout(); }
+    }
+    function cur(){ if(!marks.length) return; var top=sc.scrollTop+40, on=null;
+      marks.forEach(function(k){ var x=pages[k.m.p]; if(!x.box) return; var vp=x.p.getViewport({scale:fit*z});
+        if(x.box.offsetTop+vp.convertToViewportPoint(0,k.m.y+k.m.h)[1]<=top) on=k; });
+      marks.forEach(function(k){ k.a.classList.toggle("on",k===on); }); }
+    sc.addEventListener("scroll",cur);
+    fit=fitScale(); layout(); num(); buildToc();
+  })().catch(function(e){ document.getElementById("pages").innerHTML='<div id="msg">Не удалось показать файл: '+e.message+'</div>'; });<\/script></body></html>`;
+}
 function renderDoc(frame, r) {
   let html = r.html || "";
   if (r.kind === "html" && r.simple) {                  /* выгрузку «как у Google» получить не удалось — честно показываем упрощённый вид и причину */
     const note = `<div style="font:12px/1.4 Arial;background:#FFF3D6;color:#8A5A00;padding:8px 12px;border-bottom:1px solid #F2D9A6">Упрощённый вид таблицы: оформление Google получить не удалось${r.why ? " (" + esc(r.why) + ")" : ""}.</div>`;
     html = /<body[^>]*>/i.test(html) ? html.replace(/<body[^>]*>/i, m => m + note) : note + html;
   }
-  frame.srcdoc = r.kind === "html" ? docInject(html, !!r.sheet) : watermark(pdfPage(r.pdf));
+  frame.srcdoc = r.kind === "html" ? docInject(html, !!r.sheet) : watermark(r.doc ? pdfScroll(r.pdf, r.toc) : pdfPage(r.pdf));
 }
 async function loadDoc(frame, l) {
   const cached = await docCacheGet(l.id);
@@ -960,7 +1059,8 @@ function openLesson(l, at, quote) {
             </div>
             <p class="hint tiny">Счётчик идёт по вашим кликам по видео: Google Диск не сообщает, на какой минуте плеер. Пока видео грузится и после перемотки время может разойтись — поправьте его в поле вручную.</p>` : ""}
           ${textual ? '<p class="hint tiny">Выделите фразу в конспекте: цветной маркер — в «Выделения», кнопка «Заметка» — сюда.</p>' : ""}
-          ${gk === "pdf" ? '<p class="hint tiny">Листайте кликом по левому или правому краю, кнопками внизу или стрелками ← →. Текст на слайде можно выделить и скопировать в заметку.</p>'
+          ${gk === "doc" ? '<p class="hint tiny">Документ показан 1 в 1, как в Google. Прокрутка колесом, масштаб − / + внизу, пункты оглавления кликабельны. Нужный текст выделите и скопируйте в заметку.</p>'
+            : gk === "pdf" ? '<p class="hint tiny">Листайте кликом по левому или правому краю, кнопками внизу или стрелками ← →. Текст на слайде можно выделить и скопировать в заметку.</p>'
             : slides ? '<p class="hint tiny">Текст со слайдов скопировать нельзя — Google показывает их картинками. Листайте стрелками ← → на клавиатуре или под слайдом.</p>'
             : !textual && !video ? '<p class="hint tiny">Маркер и цитаты по выделению работают только в конспектах. Здесь нужную фразу скопируйте (⌘C) и вставьте в заметку.</p>' : ""}
           <textarea class="ntext" placeholder="Пишите прямо во время просмотра — окно не закрывается"></textarea>
