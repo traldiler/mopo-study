@@ -807,16 +807,30 @@ function gdocKind(l) {
   if (l.kind !== "видео" && /drive\.google\.com\/(file\/d\/|open\?id=)/.test(u)) return "pdf";
   return "";
 }
-const DOCC = "mopo-docs-v1";
+const DOCC = "mopo-docs-v2";                           /* v2: таблицы 1 в 1 и кликабельное оглавление — старые копии не берём */
 async function docCacheGet(id) { try { const r = await (await caches.open(DOCC)).match("/__doc/" + encodeURIComponent(id)); return r ? await r.json() : null; } catch (e) { return null; } }
 async function docCachePut(id, v) { try { await (await caches.open(DOCC)).put("/__doc/" + encodeURIComponent(id), new Response(JSON.stringify(v), { headers: { "Content-Type": "application/json" } })); } catch (e) { } }
 const docPage = (text) => `<body style="font:15px/1.5 Arial,sans-serif;color:#232227;padding:28px">${text}</body>`;
 const DOC_CSS = `<style>body{max-width:880px!important;margin:0 auto!important;padding:28px 36px 60px!important;background:#fff}
   img{max-width:100%!important;height:auto!important} table{max-width:100%}</style>`;
-function docInject(html) {
-  const head = SHIM_JS + HL_CSS + DOC_CSS;
+/* оглавление в копии документа приходит простым текстом — делаем строки, совпадающие с заголовками, ссылками на них */
+const TOC_JS = `<script>(function(){
+  var hs=[].slice.call(document.querySelectorAll("h1,h2,h3,h4,h5,h6")); if(!hs.length) return;
+  var norm=function(t){return String(t||"").replace(/\\s+/g," ").trim().toLowerCase();};
+  var map={}; hs.forEach(function(h){ var k=norm(h.textContent); if(k&&!map[k]) map[k]=h; });
+  [].slice.call(document.querySelectorAll("p,li")).forEach(function(p){
+    if(p.closest("h1,h2,h3,h4,h5,h6")) return;
+    var k=norm(p.textContent).replace(/\\s*\\d+$/,""), h=map[k];
+    if(!h || !(p.compareDocumentPosition(h) & Node.DOCUMENT_POSITION_FOLLOWING)) return;
+    p.style.cursor="pointer"; p.style.color="#C84E17"; p.title="Перейти к разделу";
+    p.addEventListener("click",function(){ h.scrollIntoView({block:"start"}); });
+  });
+})();<\/script>`;
+function docInject(html, sheet) {
+  const head = SHIM_JS + HL_CSS + (sheet ? "" : DOC_CSS);
   let h = /<head[^>]*>/i.test(html) ? html.replace(/<head[^>]*>/i, m => m + head) : head + html;
-  h = h.includes("</body>") ? h.replace("</body>", HL_JS + "</body>") : h + HL_JS;
+  const tail = HL_JS + (sheet ? "" : TOC_JS);
+  h = h.includes("</body>") ? h.replace("</body>", tail + "</body>") : h + tail;
   return watermark(h);
 }
 function pdfPage(b64) {
@@ -861,7 +875,7 @@ function pdfPage(b64) {
   })().catch(function(e){ document.getElementById("st").innerHTML='<div id="msg">Не удалось показать файл: '+e.message+'</div>'; });<\/script></body></html>`;
 }
 function renderDoc(frame, r) {
-  frame.srcdoc = r.kind === "html" ? docInject(r.html) : watermark(pdfPage(r.pdf));
+  frame.srcdoc = r.kind === "html" ? docInject(r.html, !!r.sheet) : watermark(pdfPage(r.pdf));
 }
 async function loadDoc(frame, l) {
   const cached = await docCacheGet(l.id);
