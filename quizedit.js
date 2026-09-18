@@ -202,7 +202,7 @@ async function quizEditor({ quizId, sub, block, topic, lessons, onDone, mode, ba
     if (retake === null) return;
     try {
       await api("admin.quizSave", { data: { id: Q.id, sub: sub || "", block: block, title: Q.title, pass: Q.pass, retake: retake, questions: Q.questions } });
-      close(); QZ.data = null; PR.program = null; toast(retake ? "Тест сохранён — сдавших попросили пересдать" : "Тест сохранён"); if (onDone) onDone();
+      close(); QZ.data = null; PR.qOver = null; PR.program = null; toast(retake ? "Тест сохранён — сдавших попросили пересдать" : "Тест сохранён"); if (onDone) onDone();
     } catch (e) { fail(e); }
   };
   const rs = $$('[data-a="reset"]');
@@ -210,7 +210,7 @@ async function quizEditor({ quizId, sub, block, topic, lessons, onDone, mode, ba
     if (!await ask({ title: "Вернуть исходный тест?", ok: "Вернуть", text: "Тест станет таким, каким был до правок в кабинете. Ваши правки останутся в истории таблицы." })) return;
     const retake = await askRetake("вернёте исходный тест");
     if (retake === null) return;
-    try { await api("admin.quizReset", { id: Q.id, retake: retake }); close(); QZ.data = null; toast("Исходный тест возвращён"); if (onDone) onDone(); }
+    try { await api("admin.quizReset", { id: Q.id, retake: retake }); close(); QZ.data = null; PR.qOver = null; toast("Исходный тест возвращён"); if (onDone) onDone(); }
     catch (e) { fail(e); }
   };
   draw();

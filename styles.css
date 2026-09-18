@@ -1571,3 +1571,4 @@ label.f{font-family:var(--f-text); font-size:13px; font-weight:600; letter-spaci
   background:rgba(35,34,39,.86); color:#fff; box-shadow:0 6px 18px rgba(0,0,0,.18); pointer-events:none;}
 .savebadge.bad{background:#B77A00;}
 @media (max-width:700px){ .savebadge{left:50%; transform:translateX(-50%); bottom:12px;} }
+.tcsink{position:absolute; width:1px; height:1px; opacity:0; pointer-events:none; left:-9999px;}

@@ -10,7 +10,10 @@ async function examData() {
   try { if (!PR.program) PR.program = await api("program"); } catch (e) { /* без программы — исходный порядок */ }
   let extra = [], off = new Set();
   let replaced = new Set();
-  try { const x = await api("exam.extra"); extra = x.topics || []; off = new Set(x.excludeLessons || []); replaced = new Set(x.excludeIds || []); } catch (e) { /* без добавленных вопросов */ }
+  try {                                              /* вопросы тем уже пришли при входе — отдельный запрос не нужен */
+    const x = (!APP.demo && PR.examX) ? PR.examX : await api("exam.extra");
+    extra = x.topics || []; off = new Set(x.excludeLessons || []); replaced = new Set(x.excludeIds || []);
+  } catch (e) { /* без добавленных вопросов */ }
   d.blocks.forEach(b => b.questions = b.questions.filter(q => !(q.ref && off.has(q.ref)) && !replaced.has(q.id)));   /* снятые темы и исходные вопросы, заменённые правкой */   /* тему сняли с экзамена — убираем и её исходные вопросы */
   d.blocks = d.blocks.filter(b => b.questions.length);
   const prog = (PR.program && PR.program.blocks) || [], title = n => (prog.filter(b => Number(b.n) === Number(n))[0] || {}).title;

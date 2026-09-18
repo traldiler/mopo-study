@@ -9,7 +9,7 @@ const APP = { user: null, token: localStorage.getItem("mopo-token") || "", scree
 /* ---------- обращение к серверу ---------- */
 /* списки кабинета РОПа и разработчика: показываем из памяти сразу, свежие подтягиваем в фоне */
 const SWR = {};
-const SWR_READ = /^admin\.(users|students|attempts|questions|badges|materials|resets|examList)$/;
+const SWR_READ = /^admin\.(users|students|attempts|attempt|questions|badges|materials|resets|examList|quizGet|examGet)$/;
 function swrRedraw() {
   const busy = document.querySelector(".modal-back, .viewer") || /INPUT|TEXTAREA|SELECT/.test((document.activeElement || {}).tagName || "");
   if (busy || !/^adm:/.test(APP.screen || "")) return;
@@ -39,7 +39,10 @@ async function api(action, data) {
     SWR[key] = { v: v, at: Date.now() };
     return JSON.parse(JSON.stringify(v));
   }
-  if (/^admin\.|^question\./.test(action)) Object.keys(SWR).forEach(k => delete SWR[k]);   /* что-то поменяли — списки перечитаем */
+  if (/^admin\.|^question\./.test(action) && action !== "admin.boot") {       /* что-то поменяли — списки перечитаем в фоне */
+    Object.keys(SWR).forEach(k => delete SWR[k]);
+    setTimeout(() => adminPrefetch(true), 400);
+  }
   return apiRaw(action, data);
 }
 async function apiRaw(action, data) {
@@ -80,7 +83,8 @@ function outKeep() { try { localStorage.setItem(outKey(), JSON.stringify(OUT.q))
 function snapKeep() {
   if (APP.demo || !APP.user || !PR.program) return;
   try {
-    localStorage.setItem("mopo-snap-" + APP.user.id, JSON.stringify({ user: APP.user, program: PR.program, progress: PR.progress, qOver: PR.qOver || null, mat: MAT_HEX, at: Date.now() }));
+    localStorage.setItem("mopo-snap-" + APP.user.id, JSON.stringify({ user: APP.user, program: PR.program, progress: PR.progress, qOver: PR.qOver || null,
+      examX: PR.examX || null, myq: MYQ.data, mat: MAT_HEX, at: Date.now() }));
     localStorage.setItem("mopo-last-user", APP.user.id);
   } catch (e) { /* не страшно */ }
 }
@@ -92,6 +96,40 @@ function snapLoad() {
 }
 function snapDrop() {
   try { Object.keys(localStorage).filter(k => /^mopo-(snap|last-user)/.test(k)).forEach(k => localStorage.removeItem(k)); } catch (e) { }
+}
+/* ответ сервера при входе: всё, что нужно кабинету, одним куском */
+function applyBoot(b) {
+  if (b.user) APP.user = Object.assign(APP.user || {}, b.user);
+  PR.program = b.program; PR.progress = b.progress; PR.qOver = b.quizzes || null; PR.examX = b.examX || null;
+  if (b.mat) MAT_HEX = b.mat;
+  if (b.myq) { MYQ.data = b.myq; MYQ.at = Date.now(); }
+  OUT.q.forEach(it => applyLocal(it.action, it.data));
+  if (typeof QZ !== "undefined") QZ.data = null;
+  if (typeof EX !== "undefined" && !EX.running) EX.data = null;
+  REFRESH.at = Date.now(); snapKeep();
+  if (isStaff(APP.user)) adminPrefetch();
+}
+/* РОП и разработчик: все списки кабинета одним запросом в фоне — вкладки потом открываются мгновенно */
+const PREF = { at: 0, busy: false };
+async function adminPrefetch(force) {
+  if (APP.demo || PREF.busy || (!force && Date.now() - PREF.at < 60000)) return;
+  PREF.busy = true;
+  try {
+    const a = await apiRaw("admin.boot"), now = Date.now();
+    const put = (action, data, v) => { SWR[action + JSON.stringify(data || {})] = { v: v, at: now }; };
+    put("admin.students", null, { students: a.students });
+    put("admin.attempts", null, { attempts: a.attempts });
+    put("admin.users", null, { users: a.users });
+    put("admin.resets", null, { resets: a.resets });
+    put("admin.questions", { box: "rop" }, { questions: a.questionsRop });
+    if (a.questionsDev) put("admin.questions", { box: "dev" }, { questions: a.questionsDev });
+    put("admin.materials", null, a.materials);
+    put("admin.examList", null, a.examList);
+    put("admin.badges", null, a.badges);
+    PREF.at = now;
+    if (/^adm:/.test(APP.screen || "") && document.querySelector("#admbody .lead, #admbody .hint") && /Загружаем/.test(($("#admbody") || {}).textContent || "")) swrRedraw();
+  } catch (e) { /* не вышло — вкладки загрузят сами */ }
+  PREF.busy = false;
 }
 /* применить действие к своей копии — то же, что потом сделает сервер */
 function applyLocal(action, d) {
@@ -136,11 +174,12 @@ async function outFlush() {
 function saveBadge() {
   let b = document.getElementById("savebadge");
   if (!b) { b = el("div", "savebadge"); b.id = "savebadge"; b.setAttribute("role", "status"); document.body.appendChild(b); }
-  b.hidden = !OUT.q.length;
+  b.hidden = !OUT.q.length || !OUT.fail;                /* обычное сохранение идёт незаметно, показываем только проблемы со связью */
   b.classList.toggle("bad", !!OUT.fail);
   b.textContent = OUT.fail ? "Нет связи — сохраним, как только появится" : "Сохраняется…";
 }
-window.addEventListener("beforeunload", e => { if (OUT.q.length && !APP.demo) { e.preventDefault(); e.returnValue = ""; } });
+/* спрашиваем при закрытии, только если связь пропала и изменения правда не ушли. Текст окна браузер не даёт менять */
+window.addEventListener("beforeunload", e => { if (OUT.q.length && OUT.fail && !APP.demo) { e.preventDefault(); e.returnValue = ""; } });
 window.addEventListener("pagehide", () => {
   if (!OUT.q.length || APP.demo || !navigator.sendBeacon) return;
   try { navigator.sendBeacon(window.API_URL, new Blob([JSON.stringify({ action: "batch", token: APP.token, items: OUT.q.slice(0, 30) })], { type: "text/plain;charset=utf-8" })); }
@@ -153,12 +192,7 @@ async function refreshBg(force) {
   if (!force && Date.now() - REFRESH.at < 45000) return;
   REFRESH.busy = true;
   try {
-    const b = await api("boot");
-    if (b.user) APP.user = Object.assign(APP.user || {}, b.user);
-    PR.program = b.program; PR.progress = b.progress; PR.qOver = b.quizzes || null; if (b.mat) MAT_HEX = b.mat;
-    OUT.q.forEach(it => applyLocal(it.action, it.data));
-    if (typeof QZ !== "undefined") QZ.data = null;
-    REFRESH.at = Date.now(); snapKeep();
+    applyBoot(await api("boot"));
     const busy = document.querySelector(".viewer, .modal-back") || /INPUT|TEXTAREA|SELECT/.test((document.activeElement || {}).tagName || "");
     if (!busy && /^(cabinet|notes)$/.test(APP.screen)) { renderNav(); backToPlace(); }
   } catch (e) { /* нет связи — остаёмся на копии */ }
@@ -387,12 +421,7 @@ async function loadCabinet(force) {
     if (!PR.program || force) PR.program = await api("program");
     PR.progress = await api("progress.get");
   } else if (!PR.program || !PR.progress || force) {  /* один запрос: программа, прогресс, ключ материалов, правки тестов */
-    const b = await api("boot");
-    PR.program = b.program; PR.progress = b.progress; PR.qOver = b.quizzes || null;
-    if (b.mat) MAT_HEX = b.mat;
-    if (b.user) APP.user = Object.assign(APP.user || {}, b.user);
-    OUT.q.forEach(it => applyLocal(it.action, it.data));
-    REFRESH.at = Date.now(); snapKeep();
+    applyBoot(await api("boot"));
   } else refreshBg();                                  /* копия уже есть — показываем её, свежее подтянем в фоне */
   try { await quizData(); } catch (e) { /* без описания тестов строки покажут общий текст */ }
   PR.progress.notes = PR.progress.notes || {};
@@ -653,7 +682,9 @@ function lessonRow(l) {
   row.innerHTML = `<div class="ic">${KIND[l.kind] || "•"}</div>
     <div class="t">${esc(l.title)}<small>${esc(l.kind)}${l.note ? " · " + esc(l.note) : ""}${notes.length ? " · " + plural(notes.length, "заметка", "заметки", "заметок") : ""}${hls ? " · " + plural(hls, "выделение", "выделения", "выделений") : ""}</small></div>`;
   if (l.ready) {
-    const open = el("button", "go", "Открыть"); open.type = "button"; open.onclick = () => openLesson(l);
+    const ext = l.kind === "сайт" && NOFRAME.test(String(l.url));           /* такой сайт показывается только отдельной вкладкой */
+    const open = el("button", "go", ext ? "Открыть в новой вкладке ↗" : "Открыть"); open.type = "button"; open.onclick = () => openLesson(l);
+    if (ext) open.title = "Этот сайт не разрешает показывать себя внутри кабинета";
     const note = el("button", "go quiet", notes.length ? "Заметки" : "Заметка"); note.type = "button"; note.onclick = () => notesFor(l);
     const star = el("button", "star" + (marked ? " on" : ""), marked ? "★" : "☆"); star.type = "button";
     star.title = marked ? "Убрать из закладок" : "В закладки";
@@ -698,6 +729,7 @@ function driveEmbed(url) {
   if (d) return `https://docs.google.com/${d[1]}/d/${d[2]}/preview`;
   return url;
 }
+const NOFRAME = /(^|\/\/)(www\.)?prom-import\.com/i;   /* сайт Пром-Импорта пока запрещает встраивание (X-Frame-Options) */
 function isInternal(u) { return /^(konspekt|shemy)\//.test(String(u)); }
 /* маркеры для выделений: 5 цветов, одинаковые в кабинете и в конспекте */
 const MARKERS = [null, { n: "жёлтый", c: "#FFE070" }, { n: "зелёный", c: "#8EDDA4" }, { n: "голубой", c: "#9CC4FF" },
@@ -757,7 +789,21 @@ async function loadInner(frame, url) {
   const topic = new URLSearchParams(query || "").get("t") || "";
   try {
     const html = await matLoad(path);
-    frame.srcdoc = (topic ? `<script>window.__topic=${JSON.stringify(topic)}<\/script>` : "") + watermark(html);
+    /* страница показана «изнутри» кабинета: якоря оглавления и история браузера иначе уводят на сам кабинет */
+    const shim = `<script>(function(){
+      var r=history.replaceState.bind(history),p=history.pushState.bind(history);
+      history.replaceState=function(){try{r.apply(null,arguments)}catch(e){}};
+      history.pushState=function(){try{p.apply(null,arguments)}catch(e){}};
+      document.addEventListener("click",function(e){
+        var a=e.target.closest&&e.target.closest("a[href]"); if(!a) return;
+        var h=a.getAttribute("href")||"";
+        if(h.charAt(0)==="#"){ e.preventDefault(); var id=decodeURIComponent(h.slice(1));
+          var t=id?(document.getElementById(id)||document.querySelector('[name="'+id+'"]')):document.body;
+          if(t) t.scrollIntoView({behavior:"smooth",block:"start"}); return; }
+        if(/^https?:/i.test(h)){ e.preventDefault(); window.open(h,"_blank","noopener"); }
+      },true);
+    })();<\/script>`;
+    frame.srcdoc = shim + (topic ? `<script>window.__topic=${JSON.stringify(topic)}<\/script>` : "") + watermark(html);
   } catch (e) {
     frame.srcdoc = `<body style="font:15px/1.5 Arial,sans-serif;color:#232227;padding:24px">Не удалось открыть материал: ${esc(e.message)}<br><br>Обновите страницу и попробуйте ещё раз.</body>`;
   }
@@ -765,12 +811,20 @@ async function loadInner(frame, url) {
 function openLesson(l, at, quote) {
   PR.progress.lastLesson = l.id;
   save("lesson.open", { lessonId: l.id });
+  /* сайты, которые запрещают показывать себя внутри чужих страниц, — сразу отдельной вкладкой.
+     Авито и Дром разрешают — они открываются внутри, с заметками сбоку и кнопкой «в новой вкладке» */
+  if (l.kind === "сайт" && NOFRAME.test(String(l.url))) {
+    const w = window.open(l.url, "_blank");
+    if (w) { try { w.opener = null; } catch (e) { } toast("Сайт открыт в новой вкладке"); }
+    else toast("Браузер не дал открыть вкладку — разрешите всплывающие окна для этого сайта");
+    return;
+  }
   const v = el("div", "viewer split");
   const video = l.kind === "видео", inner = isInternal(l.url), textual = /^konspekt\//.test(String(l.url));
   const src = inner ? l.url : driveEmbed(l.url);
   let tab = quote && notesOf(l.id).some(n => isHl(n) && n.quote === quote) ? "hl" : "note";
   v.innerHTML = `<div class="vhead"><b>${esc(l.title)}</b>
-      <button type="button" data-a="newtab" class="quiet">Открыть в новой вкладке ↗</button>
+      ${inner ? "" : '<button type="button" data-a="newtab" class="quiet">Открыть в новой вкладке ↗</button>'}
       <button type="button" data-a="notes" class="on first">Заметки</button>
       <button type="button" data-a="ask">${isStaff(APP.user) ? "Вопрос разработчику" : "Спросить РОПа"}</button>
       <button type="button" data-a="bm" class="bm"></button>
@@ -789,6 +843,7 @@ function openLesson(l, at, quote) {
             </div>
             <p class="hint tiny">Счётчик сам включается и встаёт на паузу, когда вы нажимаете play/pause в плеере. Разошёлся с видео — поправьте кнопкой или впишите время руками.</p>` : ""}
           ${textual ? '<p class="hint tiny">Выделите фразу в конспекте: цветной маркер — в «Выделения», кнопка «Заметка» — сюда.</p>' : ""}
+          ${!textual && !video ? '<p class="hint tiny">Маркер и цитаты по выделению работают только в конспектах. Здесь нужную фразу скопируйте (⌘C) и вставьте в заметку.</p>' : ""}
           <textarea class="ntext" placeholder="Пишите прямо во время просмотра — окно не закрывается"></textarea>
           <div class="nbtns"><button class="btn" data-a="save" type="button">Сохранить заметку</button>
             <button class="btn ghost" data-a="clear" type="button" hidden>Сбросить</button></div>
@@ -813,7 +868,7 @@ function openLesson(l, at, quote) {
     backToPlace();
   };
   v.querySelector('[data-a="close"]').onclick = close;
-  v.querySelector('[data-a="newtab"]').onclick = () => {      /* оригинал материала отдельной вкладкой: Диск, документ или страница кабинета */
+  if (v.querySelector('[data-a="newtab"]')) v.querySelector('[data-a="newtab"]').onclick = () => {      /* оригинал материала отдельной вкладкой: Диск, документ или страница кабинета */
     const w = window.open(l.url, "_blank");                    /* без noopener: иначе браузер всегда возвращает null */
     if (w) try { w.opener = null; } catch (e) { /* не страшно */ }
     if (!w && !APP.demo) toast("Браузер не дал открыть вкладку — разрешите всплывающие окна для этого сайта");
@@ -863,9 +918,19 @@ function openLesson(l, at, quote) {
     put.onclick = () => { inp.value = mmss(secs()); toast("Таймкод " + inp.value + " добавлен к заметке"); };
     v.querySelector('[data-a="tcreset"]').onclick = () => { acc = 0; t0 = 0; paint(); };
     paint();
-    watchFocus = () => {                           /* клик внутрь плеера = play/pause */
+    /* Диск не сообщает, играет ли видео. Ловим клик по плееру: мышь над видео + фокус ушёл в плеер.
+       После клика забираем фокус обратно, чтобы поймать и следующий клик (пауза). Первые 1,5 с после открытия не считаем. */
+    const fr = v.querySelector("iframe"), openedAt = Date.now();
+    let over = false;
+    const sink = el("button", "tcsink"); sink.type = "button"; sink.tabIndex = -1; sink.setAttribute("aria-hidden", "true");
+    v.appendChild(sink);
+    fr.addEventListener("mouseenter", () => { over = true; });
+    fr.addEventListener("mouseleave", () => { over = false; });
+    watchFocus = () => {
       setTimeout(() => {
-        if (document.activeElement === v.querySelector("iframe")) { run(!t0); document.activeElement.blur(); }
+        if (document.activeElement !== fr || !over || Date.now() - openedAt < 1500) return;
+        run(!t0);
+        setTimeout(() => { try { sink.focus({ preventScroll: true }); } catch (e) { } }, 150);
       }, 60);
     };
     window.addEventListener("blur", watchFocus);
@@ -1584,15 +1649,17 @@ async function start() {
   try {
     const snap = !APP.demo && !APP.user && snapLoad();
     if (snap) {                                      /* кабинет открывается сразу с прошлой копии, свежее придёт в фоне */
-      APP.user = snap.user; PR.program = snap.program; PR.progress = snap.progress; PR.qOver = snap.qOver; MAT_HEX = snap.mat || "";
+      APP.user = snap.user; PR.program = snap.program; PR.progress = snap.progress; PR.qOver = snap.qOver; PR.examX = snap.examX || null; MAT_HEX = snap.mat || "";
       outLoad(); OUT.q.forEach(it => applyLocal(it.action, it.data));
+      if (snap.myq) MYQ.data = snap.myq;
       setTimeout(() => { refreshBg(true); outFlush(); }, 50);
     } else if (!APP.user) {                          /* первый вход на этом устройстве — всё одним запросом */
       $("#app").innerHTML = `<div class="card"><p class="lead">Загружаем кабинет…</p></div>`;
       const b = await api(APP.demo ? "me" : "boot");
       APP.user = b.user;
-      if (!APP.demo) { PR.program = b.program; PR.progress = b.progress; PR.qOver = b.quizzes || null; if (b.mat) MAT_HEX = b.mat; REFRESH.at = Date.now(); outLoad(); snapKeep(); outFlush(); }
+      if (!APP.demo) { outLoad(); applyBoot(b); outFlush(); }
     } else if (!APP.demo) { outLoad(); outFlush(); }
+    if (!APP.demo && isStaff(APP.user)) setTimeout(() => adminPrefetch(), 1500);
     go(isStaff(APP.user) && staffMode() === "admin" ? "adm:students" : "cabinet");
   } catch (e) { screenLogin(); }
 }

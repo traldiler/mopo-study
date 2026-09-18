@@ -419,7 +419,7 @@ const truthy = v => !(v === false || v === "FALSE" || v === "false");
 /* сколько исходных вопросов экзамена относится к каждому уроку (по уроку-источнику) */
 async function examBaseCounts() {
   if (ADM.examBase) return ADM.examBase;
-  const d = await fetch("data/exam.json", { cache: "no-store" }).then(r => r.json()), out = {};
+  const d = JSON.parse(await matLoad("data/exam.json")), out = {};                /* на сайте экзамен лежит зашифрованным */
   d.blocks.forEach(b => b.questions.forEach(q => { if (q.ref) out[q.ref] = (out[q.ref] || 0) + 1; }));
   return (ADM.examBase = out);
 }
@@ -494,7 +494,7 @@ async function admMaterials() {
   let d;
   let exams = { topics: {}, excluded: [] }, base = {};
   try {
-    d = await matData(); await quizData(true);
+    d = await matData(); await quizData();
     exams = await api("admin.examList"); base = await examBaseCounts();
   } catch (e) { return fail(e); }
   const box = $("#ltbl"); box.innerHTML = "";
