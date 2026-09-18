@@ -885,12 +885,16 @@ async function drvStatus() {
   let r;
   try { r = await api("admin.driveStatus"); } catch (e) { btn.disabled = false; btn.textContent = "Проверить доступ к файлам"; return fail(e); }
   btn.disabled = false; btn.textContent = "Проверить ещё раз";
+  if (!r || !Array.isArray(r.files)) {                      /* неожиданный ответ — показываем как есть, чтобы понять причину */
+    box.innerHTML = `<div class="note warn">Сервер ответил не так, как ожидалось. Пришлите разработчику текст ниже:<pre class="drvraw">${esc(JSON.stringify(r).slice(0, 600))}</pre></div>`;
+    return;
+  }
   const docs = r.files.filter(f => !f.video), vids = r.files.filter(f => f.video);
   const noDoc = docs.filter(f => !f.ok), noVid = vids.filter(f => !f.ok || !f.canEdit);
   const open = vids.filter(f => f.ok && f.access === "ANYONE_WITH_LINK").length;
   const dev = APP.user.role === "dev";
   box.innerHTML = `<div class="drv">
-    <p>Кабинет работает от почты <b class="inl">${esc(r.account)}</b>.</p>
+    <p>Кабинет работает от почты <b class="inl">${esc(r.account || "—")}</b>. Проверено файлов: ${r.files.length}.</p>
     <p><b class="inl">Документы, таблицы, презентации:</b> ${docs.length - noDoc.length} из ${docs.length} доступны.</p>
     ${noDoc.length ? `<div class="note warn">Нет доступа к ${plural(noDoc.length, "файлу", "файлам", "файлам")} — откройте их для ${esc(r.account)} с правом «Читатель»
       (проще всего — всю папку с материалами разом):<ul>${noDoc.map(f => `<li>${esc(f.title)}</li>`).join("")}</ul></div>` : ""}
