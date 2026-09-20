@@ -52,7 +52,7 @@ async function api(action, data) {
 }
 async function apiRaw(action, data) {
   /* сервер Google иногда отвечает сбоем вместо данных — чтение повторяем сами, запись не дублируем */
-  const safe = /^(boot|program|progress\.get|me|my\.questions|mat\.key|quiz\.overrides|exam\.extra|quiz\.review|doc\.get|admin\.(users|students|attempts|attempt|questions|badges|materials|resets|examList|examGet|quizGet))$/.test(action);
+  const safe = /^(boot|program|progress\.get|me|my\.questions|mat\.key|quiz\.overrides|exam\.extra|quiz\.review|doc\.get|doc\.sheet|admin\.(users|students|attempts|attempt|questions|badges|materials|resets|examList|examGet|quizGet))$/.test(action);
   let j = null;
   for (let tryN = 0; tryN < (safe ? 3 : 1); tryN++) {
     try {
@@ -242,7 +242,11 @@ function choose({ title, text, buttons }) {
 function lockScroll(on) {
   document.body.classList.toggle("noscroll", !!on || !!document.querySelector(".viewer, .modal-back"));
 }
+let TOAST_LAST = { text: "", at: 0 };
 function toast(text) {
+  const now = Date.now();
+  if (text === TOAST_LAST.text && now - TOAST_LAST.at < 12000) return;   /* не повторяем одно и то же сообщение */
+  TOAST_LAST = { text: text, at: now };
   document.querySelectorAll(".toast").forEach(t => t.remove());
   const t = el("div", "toast", esc(text)); t.title = "Нажмите, чтобы убрать";
   t.onclick = () => t.remove();
@@ -832,7 +836,7 @@ const docWait = (title) => `<body style="font:15px/1.6 Arial,sans-serif;color:#2
     <div id="t" style="color:#6D6B72;font-size:13px;margin-top:8px">идёт 0 сек</div>
   </div>
   <script>var n=0,b=document.getElementById("b"),t=document.getElementById("t");
-    setInterval(function(){ n++; t.textContent="идёт "+n+" сек"+(n>90?" — ещё немного, документ большой":"");
+    setInterval(function(){ n++; t.textContent=n<60?("прошло "+n+" сек"):("прошло "+Math.floor(n/60)+" мин "+(n%60)+" сек — документ большой, ещё немного");
       b.style.width=Math.min(95,12+n*1.4)+"%"; },1000);<\/script></body>`;
 const DOC_CSS = `<style>body{max-width:880px!important;margin:0 auto!important;padding:28px 36px 60px!important;background:#fff}
   img{max-width:100%!important;height:auto!important} table{max-width:100%}</style>`;
@@ -1097,27 +1101,32 @@ function pdfScroll(toc) {
 }
 /* таблица: вкладки листов рисует кабинет, сам лист приходит отдельным запросом — большие таблицы иначе не успевают собраться */
 function sheetShell(names) {
+  const NAMESJ = JSON.stringify(names || []).replace(/</g, "\\u003c");
   const tabs = (names || []).map((n, i) => `<button type="button" data-i="${i}"${i ? "" : ' class="on"'}>${esc(n)}</button>`).join("");
   return `<!doctype html><html><head><meta charset="utf-8"><style>
   html,body{margin:0;height:100%;background:#fff;font:13px Arial,sans-serif;color:#232227}
-  #bar{position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px 12px;background:#F7F6F4;border-bottom:1px solid #E5E3DF}
+  body{display:flex;flex-direction:column}
+  #bar{flex:0 0 auto;display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px 12px;background:#F7F6F4;border-bottom:1px solid #E5E3DF}
   #bar button{border:1px solid #E5E3DF;background:#fff;border-radius:999px;padding:5px 12px;font:12px Arial;cursor:pointer;color:#232227}
   #bar button.on{background:#232227;color:#fff;border-color:#232227}
   #bar .z{margin-left:auto;display:flex;gap:6px;align-items:center;font:12px Arial;color:#6D6B72}
-  #wrap{position:absolute;inset:44px 0 0 0;overflow:auto;padding:12px}#inner{transform-origin:0 0}
+  #wrap{flex:1 1 auto;overflow:auto;padding:12px;min-height:0}#inner{transform-origin:0 0}
   table{border-collapse:collapse;table-layout:fixed}
   td{border:1px solid #E1DFDB;padding:4px 6px;vertical-align:top;font-size:12px;line-height:1.35;overflow-wrap:anywhere}
   .cut{color:#6D6B72;font-size:12px;margin:10px 2px}
   td a{color:#C84E17}
-  .wait{padding:24px;color:#6D6B72}</style></head><body>
+  .wait{padding:40px 24px;color:#6D6B72;display:flex;gap:12px;align-items:center;font-size:14px}
+  .sp{width:20px;height:20px;border:3px solid #E5E3DF;border-top-color:#E66023;border-radius:50%;animation:sp 1s linear infinite;flex:0 0 auto}
+  @keyframes sp{to{transform:rotate(360deg)}}</style></head><body>
   <div id="bar">${tabs || "<b>Лист</b>"}<span class="z"><button type="button" id="zm">−</button><span id="zv">100%</span>
     <button type="button" id="zp">+</button><button type="button" id="zf">По ширине</button></span></div>
-  <div id="wrap"><div id="inner"><div class="wait" id="w">Загружаем лист…</div></div></div>
+  <div id="wrap"><div id="inner"><div class="wait"><span class="sp"></span><span>Загружаем лист…</span></div></div></div>
   <script>(function(){
-    var z=1, wrap=document.getElementById("wrap"), inner=document.getElementById("inner"), cache={}, cur=0;
+    var NAMES=${NAMESJ};
+    var z=1, wrap=document.getElementById("wrap"), inner=document.getElementById("inner"), cache={}, cur=0, names=NAMES;
     function set(){ inner.style.transform="scale("+z+")"; inner.style.width=(100/z)+"%"; document.getElementById("zv").textContent=Math.round(z*100)+"%"; }
     function step(d){ z=Math.min(2.5,Math.max(.25,Math.round((z+d)*20)/20)); set(); }
-    function fit(){ var t=inner.querySelector("table"); if(!t) return; z=Math.min(1,Math.max(.25,(wrap.clientWidth-26)/t.scrollWidth)); set(); }
+    function fit(){ var t=inner.querySelector("table"); if(!t) return; z=Math.min(1,Math.max(.4,(wrap.clientWidth-26)/t.scrollWidth)); set(); }
     document.getElementById("zm").onclick=function(){step(-.1)};
     document.getElementById("zp").onclick=function(){step(.1)};
     document.getElementById("zf").onclick=fit;
@@ -1131,14 +1140,16 @@ function sheetShell(names) {
     function show(i){
       cur=i;
       [].slice.call(document.querySelectorAll("#bar [data-i]")).forEach(function(b){ b.classList.toggle("on",+b.dataset.i===i); });
-      if(cache[i]!==undefined){ inner.innerHTML=cache[i]; wrap.scrollTop=0; wrap.scrollLeft=0; fit(); return; }
-      inner.innerHTML='<div class="wait">Загружаем лист… первый раз это может занять до минуты</div>';
+      if(cache[i]!==undefined){ inner.innerHTML=cache[i]||'<div class="wait"><span>Лист пустой.</span></div>'; wrap.scrollTop=0; wrap.scrollLeft=0; fit(); return; }
+      inner.innerHTML='<div class="wait"><span class="sp"></span><span>Загружаем лист «'+(names[i]||"")+'»… в первый раз это может занять до минуты</span></div>';
       parent.postMessage({mopo:"needsheet",i:i},"*");
     }
     window.addEventListener("message",function(e){
       var d=e.data&&e.data.mopoSheet; if(!d) return;
-      cache[d.i]=d.error?'<div class="wait">Не удалось открыть лист: '+d.error+'</div>':d.html;
-      if(d.i===cur){ inner.innerHTML=cache[d.i]; wrap.scrollTop=0; wrap.scrollLeft=0; fit(); }
+      var html=d.error?'<div class="wait"><span>Не удалось открыть лист: '+d.error+'. Нажмите вкладку ещё раз.</span></div>'
+        :(d.html||'<div class="wait"><span>Лист пустой.</span></div>');
+      if(!d.error) cache[d.i]=html;                  /* ошибку не запоминаем: по клику попробуем снова */
+      if(d.i===cur){ inner.innerHTML=html; wrap.scrollTop=0; wrap.scrollLeft=0; fit(); }
     });
     [].slice.call(document.querySelectorAll("#bar [data-i]")).forEach(function(b){ b.onclick=function(){ show(+b.dataset.i); }; });
     /* ссылка в ячейке: документ Google открываем в кабинете, остальное — новой вкладкой */

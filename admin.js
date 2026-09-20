@@ -881,9 +881,20 @@ async function admSettings() {
 /* доступ сервиса к файлам программы: чего не хватает и кнопки для видео */
 async function drvStatus() {
   const box = $("#drvres"), btn = $("#drvcheck");
-  btn.disabled = true; btn.textContent = "Проверяем… до минуты";
-  let r;
-  try { r = await api("admin.driveStatus"); } catch (e) { btn.disabled = false; btn.textContent = "Проверить доступ к файлам"; return fail(e); }
+  btn.disabled = true; btn.textContent = "Проверяем…";
+  /* файлов больше сотни — спрашиваем порциями, чтобы сервер успевал ответить */
+  let r = null;
+  try {
+    let from = 0;
+    do {
+      const part = await api("admin.driveStatus", { from: from, count: 20 });
+      if (!part || !Array.isArray(part.files)) { r = part; break; }
+      r = r ? { account: part.account, total: part.total, files: r.files.concat(part.files) } : { account: part.account, total: part.total, files: part.files };
+      btn.textContent = "Проверяем… " + r.files.length + " из " + (part.total || "?");
+      box.innerHTML = `<p class="hint">Проверено ${r.files.length} из ${part.total || "?"} — файлов много, это занимает до минуты.</p>`;
+      from = part.next || 0;
+    } while (from);
+  } catch (e) { btn.disabled = false; btn.textContent = "Проверить доступ к файлам"; box.innerHTML = ""; return fail(e); }
   btn.disabled = false; btn.textContent = "Проверить ещё раз";
   if (!r || !Array.isArray(r.files)) {                      /* неожиданный ответ — показываем как есть, чтобы понять причину */
     box.innerHTML = `<div class="note warn">Сервер ответил не так, как ожидалось. Пришлите разработчику текст ниже:<pre class="drvraw">${esc(JSON.stringify(r).slice(0, 600))}</pre></div>`;
