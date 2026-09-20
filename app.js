@@ -809,12 +809,13 @@ function watermark(html) {
    а сервер в фоне проверяет, не обновили ли оригинал. */
 function gdocKind(l) {
   const u = String(l.url || "");
-  if (/docs\.google\.com\/(document|spreadsheets)\//.test(u)) return "doc";
+  if (/docs\.google\.com\/spreadsheets\//.test(u)) return "html";
+  if (/docs\.google\.com\/document\//.test(u)) return "doc";
   if (/docs\.google\.com\/presentation\//.test(u)) return "pdf";
   if (l.kind !== "видео" && /drive\.google\.com\/(file\/d\/|open\?id=)/.test(u)) return "pdf";
   return "";
 }
-const DOCC = "mopo-docs-v5";                           /* v2: таблицы 1 в 1 и кликабельное оглавление — старые копии не берём */
+const DOCC = "mopo-docs-v6";                           /* v2: таблицы 1 в 1 и кликабельное оглавление — старые копии не берём */
 async function docCacheGet(id) { try { const r = await (await caches.open(DOCC)).match("/__doc/" + encodeURIComponent(id)); return r ? await r.json() : null; } catch (e) { return null; } }
 async function docCachePut(id, v) { try { await (await caches.open(DOCC)).put("/__doc/" + encodeURIComponent(id), new Response(JSON.stringify(v), { headers: { "Content-Type": "application/json" } })); } catch (e) { } }
 const docPage = (text) => `<body style="font:15px/1.5 Arial,sans-serif;color:#232227;padding:28px">${text}</body>`;
@@ -891,7 +892,7 @@ function pdfScroll(b64, toc) {
   #side{position:absolute;left:0;top:0;bottom:44px;width:280px;overflow:auto;background:#fff;border-right:1px solid #E0DED9;box-sizing:border-box;padding:14px 10px 30px;display:none}
   body.side #side{display:block} #side h4{margin:2px 8px 10px;font:700 12px Arial;letter-spacing:.04em;text-transform:uppercase;color:#6D6B72}
   #side a{display:block;padding:6px 8px;border-radius:8px;color:#232227;text-decoration:none;font-size:13px;line-height:1.3;cursor:pointer}
-  #side a:hover{background:#F2F1EF} #side a.on{background:#FBE7DC;color:#C84E17;font-weight:600} #side a.nf{color:#9B99A0}
+  #side a:hover{background:#F2F1EF} #side a.on{background:#ECEBE8;color:#232227;font-weight:600} #side a.nf{color:#9B99A0}
   #side a.l2{padding-left:20px} #side a.l3{padding-left:32px;font-size:12.5px} #side a.l4{padding-left:44px;font-size:12px} #pages{padding:16px 0 30px}
   .pg{position:relative;margin:0 auto 14px;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.18)} .pg canvas{display:block;position:absolute;inset:0}
   .textLayer{position:absolute;inset:0;overflow:hidden;line-height:1;opacity:1;z-index:1}
@@ -912,7 +913,13 @@ function pdfScroll(b64, toc) {
     var raw=atob("${b64}"), u=new Uint8Array(raw.length); for(var i=0;i<raw.length;i++) u[i]=raw.charCodeAt(i);
     var pdf=await pdfjsLib.getDocument({data:u}).promise, sc=document.getElementById("sc"), wrap=document.getElementById("pages");
     var pages=[], z=1, fit=1, gen=0, TOC=${TOCJ}, marks=[];
-    for(var n=1;n<=pdf.numPages;n++){ var p=await pdf.getPage(n); pages.push({p:p,v:p.getViewport({scale:1})}); }
+    var SKIP=/^(содержание|оглавление|contents|tableofcontents)\d*$/;
+    for(var n=1;n<=pdf.numPages;n++){
+      var p=await pdf.getPage(n);
+      var txt=(await p.getTextContent()).items.map(function(x){return x.str;}).join("").toLowerCase().replace(/[^a-zа-яё0-9]+/g,"");
+      if(SKIP.test(txt)) continue;                      /* страница-оглавление в PDF пустая: слева есть своё */
+      pages.push({p:p,v:p.getViewport({scale:1})});
+    }
     function fitScale(){ var w=0; pages.forEach(function(x){ w=Math.max(w,x.v.width); }); return Math.min(1.6,(sc.clientWidth-32)/w); }
     async function draw(i,g){
       var x=pages[i]; if(x.done===g) return; x.done=g;
@@ -928,7 +935,9 @@ function pdfScroll(b64, toc) {
         d.style.left=Math.min(r[0],r[2])+"px"; d.style.top=Math.min(r[1],r[3])+"px";
         d.style.width=Math.abs(r[2]-r[0])+"px"; d.style.height=Math.abs(r[3]-r[1])+"px";
         d.title=a.url?"Открыть ссылку":"Перейти к разделу";
-        d.onclick=function(){ a.url?window.open(a.url,"_blank","noopener"):go(a.dest); }; box.appendChild(d); }); }catch(e){}
+        d.onclick=function(){ if(!a.url) return go(a.dest);
+          if(/(docs\.google\.com|drive\.google\.com)/.test(a.url)) parent.postMessage({mopo:"opendoc",url:a.url},"*");
+          else window.open(a.url,"_blank","noopener"); }; box.appendChild(d); }); }catch(e){}
     }
     async function go(dest){
       try{ if(typeof dest==="string") dest=await pdf.getDestination(dest); var i=await pdf.getPageIndex(dest[0]), x=pages[i];
@@ -948,6 +957,15 @@ function pdfScroll(b64, toc) {
     document.getElementById("zm").onclick=function(){ z=Math.max(.5,Math.round((z-.1)*10)/10); layout(); };
     document.getElementById("zp").onclick=function(){ z=Math.min(3,Math.round((z+.1)*10)/10); layout(); };
     document.getElementById("zf").onclick=function(){ z=1; fit=fitScale(); layout(); };
+    /* масштаб щипком: тачпад (ctrl+колесо и жесты Safari) и два пальца на телефоне */
+    function setZ(nz){ z=Math.min(3,Math.max(.4,Math.round(nz*100)/100)); layout(); }
+    sc.addEventListener("wheel",function(e){ if(!e.ctrlKey&&!e.metaKey) return; e.preventDefault(); setZ(z*(e.deltaY>0?.93:1.07)); },{passive:false});
+    var g0=1; document.addEventListener("gesturestart",function(e){ e.preventDefault(); g0=z; });
+    document.addEventListener("gesturechange",function(e){ e.preventDefault(); setZ(g0*e.scale); });
+    document.addEventListener("gestureend",function(e){ e.preventDefault(); });
+    var d0=0,z0=1, dist=function(t){ var dx=t[0].clientX-t[1].clientX, dy=t[0].clientY-t[1].clientY; return Math.sqrt(dx*dx+dy*dy); };
+    sc.addEventListener("touchstart",function(e){ if(e.touches.length===2){ d0=dist(e.touches); z0=z; } },{passive:true});
+    sc.addEventListener("touchmove",function(e){ if(e.touches.length===2&&d0){ e.preventDefault(); setZ(z0*dist(e.touches)/d0); } },{passive:false});
     var rt; window.addEventListener("resize",function(){ clearTimeout(rt); rt=setTimeout(function(){ fit=fitScale(); layout(); },200); });
     /* оглавление слева, как в Google Документах: заголовки ищем в тексте страниц */
     var norm=function(t){ return String(t||"").toLowerCase().replace(/ё/g,"е").replace(/[^a-zа-я0-9]+/g,""); };
@@ -978,6 +996,8 @@ function pdfScroll(b64, toc) {
       marks.forEach(function(k){ k.a.classList.toggle("on",k===on); }); }
     sc.addEventListener("scroll",cur);
     fit=fitScale(); layout(); num(); buildToc();
+    /* окно ещё не получило размер (документ открыли в спрятанной вкладке) — пересчитаем, как только появится */
+    try{ var ro=new ResizeObserver(function(){ if(sc.clientWidth&&Math.abs(fit-fitScale())>0.01){ fit=fitScale(); layout(); } }); ro.observe(sc); }catch(e){}
   })().catch(function(e){ document.getElementById("pages").innerHTML='<div id="msg">Не удалось показать файл: '+e.message+'</div>'; });<\/script></body></html>`;
 }
 function renderDoc(frame, r) {
@@ -1001,6 +1021,23 @@ async function loadDoc(frame, l) {
     if (cached) toast("Документ обновили — показываем свежую версию");
   } catch (e) { if (!cached && frame.isConnected) frame.srcdoc = docPage("Не удалось открыть документ: " + esc(e.message)); }
 }
+/* документ, на который ссылается другой документ: сервер отдаёт его так же, копией, по самой ссылке */
+async function loadDocUrl(frame, url, title) {
+  const key = "u:" + url;
+  const cached = await docCacheGet(key);
+  if (cached) renderDoc(frame, cached);
+  else frame.srcdoc = docPage("Открываем «" + esc(title || "документ") + "»…");
+  try {
+    const r = await api("doc.get", { url: url, have: cached ? cached.mt : "" });
+    if (r.same) return cached;
+    await docCachePut(key, r);
+    if (frame.isConnected) renderDoc(frame, r);
+    return r;
+  } catch (e) {
+    if (!cached && frame.isConnected) frame.srcdoc = docPage("Не удалось открыть документ: " + esc(e.message));
+    return cached;
+  }
+}
 async function loadInner(frame, url) {
   const [path, query] = String(url).split("?");
   const topic = new URLSearchParams(query || "").get("t") || "";
@@ -1023,7 +1060,9 @@ const SHIM_JS = `<script>(function(){
         if(h.charAt(0)==="#"){ e.preventDefault(); var id=decodeURIComponent(h.slice(1));
           var t=id?(document.getElementById(id)||document.querySelector('[name="'+id+'"]')):document.body;
           if(t) t.scrollIntoView({behavior:"smooth",block:"start"}); return; }
-        if(/^https?:/i.test(h)){ e.preventDefault(); window.open(h,"_blank","noopener"); }
+        if(/^https?:/i.test(h)){ e.preventDefault();
+          if(/(docs\.google\.com|drive\.google\.com)/.test(h)) parent.postMessage({mopo:"opendoc",url:h},"*");
+          else window.open(h,"_blank","noopener"); }
       },true);
     })();<\/script>`;
 function openLesson(l, at, quote) {
@@ -1042,11 +1081,12 @@ function openLesson(l, at, quote) {
   const v = el("div", "viewer split");
   const gk = APP.demo ? "" : gdocKind(l), proxied = !!gk;                 /* документ Google — копией через сервер */
   const video = l.kind === "видео", inner = isInternal(l.url), framed = inner || proxied;
-  const textual = /^konspekt\//.test(String(l.url)) || gk === "html";
+  const textual = /^konspekt\//.test(String(l.url));            /* маркер и цитаты — только в конспектах */
   const slides = /docs\.google\.com\/presentation\//.test(String(l.url));
   const src = inner ? l.url : driveEmbed(l.url);
   let tab = quote && notesOf(l.id).some(n => isHl(n) && n.quote === quote) ? "hl" : "note";
   v.innerHTML = `<div class="vhead"><b>${esc(l.title)}</b>
+      <button type="button" data-a="docback" class="quiet" hidden></button>
       ${framed ? "" : '<button type="button" data-a="newtab" class="quiet">Открыть в новой вкладке ↗</button>'}
       <button type="button" data-a="notes" class="on first">Заметки</button>
       <button type="button" data-a="ask">${isStaff(APP.user) ? "Вопрос разработчику" : "Спросить РОПа"}</button>
@@ -1066,7 +1106,8 @@ function openLesson(l, at, quote) {
             </div>
             <p class="hint tiny">Счётчик идёт по вашим кликам по видео: Google Диск не сообщает, на какой минуте плеер. Пока видео грузится и после перемотки время может разойтись — поправьте его в поле вручную.</p>` : ""}
           ${textual ? '<p class="hint tiny">Выделите фразу в конспекте: цветной маркер — в «Выделения», кнопка «Заметка» — сюда.</p>' : ""}
-          ${gk === "doc" ? '<p class="hint tiny">Документ показан 1 в 1, как в Google. Прокрутка колесом, масштаб − / + внизу, пункты оглавления кликабельны. Нужный текст выделите и скопируйте в заметку.</p>'
+          ${gk === "html" ? '<p class="hint tiny">Таблица показана вкладками, как в Google: листы сверху, масштаб − / + или щипок на трекпаде. Нужное выделите и скопируйте в заметку.</p>'
+            : gk === "doc" ? '<p class="hint tiny">Документ показан 1 в 1, как в Google. Прокрутка колесом, масштаб − / + внизу или щипком, пункты оглавления кликабельны. Нужный текст выделите и скопируйте в заметку.</p>'
             : gk === "pdf" ? '<p class="hint tiny">Листайте кликом по левому или правому краю, кнопками внизу или стрелками ← →. Текст на слайде можно выделить и скопировать в заметку.</p>'
             : slides ? '<p class="hint tiny">Текст со слайдов скопировать нельзя — Google показывает их картинками. Листайте стрелками ← → на клавиатуре или под слайдом.</p>'
             : !textual && !video ? '<p class="hint tiny">Маркер и цитаты по выделению работают только в конспектах. Здесь нужную фразу скопируйте (⌘C) и вставьте в заметку.</p>' : ""}
@@ -1086,6 +1127,29 @@ function openLesson(l, at, quote) {
   const marks = () => notesOf(l.id).filter(n => n.quote && (!isHl(n) || hfOk(n)))
     .map(n => ({ text: n.quote, color: isHl(n) ? (n.color || 1) : 0 }));
   const post = msg => { try { frame().postMessage(msg, "*"); } catch (e) { /* ещё грузится */ } };
+  /* документы ссылаются друг на друга: открываем такой документ поверх, «Назад» возвращает к предыдущему */
+  const chain = [{ title: l.title, url: "" }];
+  const docBack = v.querySelector('[data-a="docback"]');
+  const paintChain = () => {
+    const top = chain[chain.length - 1];
+    v.querySelector(".vhead b").textContent = top.title;
+    docBack.hidden = chain.length < 2;
+    if (chain.length > 1) docBack.textContent = "← Назад к «" + chain[chain.length - 2].title + "»";
+  };
+  const showTop = async () => {
+    const top = chain[chain.length - 1], fr = v.querySelector("iframe");
+    paintChain();
+    if (!top.url) { if (inner) loadInner(fr, l.url); else loadDoc(fr, l); return; }
+    const r = await loadDocUrl(fr, top.url, top.title);
+    if (r && r.title && r.title !== top.title) { top.title = r.title; paintChain(); }
+  };
+  const openDocUrl = url => {
+    const u = String(url || "");
+    if (chain.some(x => x.url === u)) return;                 /* уже открыт — не зацикливаемся */
+    chain.push({ title: "Документ", url: u });
+    showTop();
+  };
+  docBack.onclick = () => { if (chain.length > 1) { chain.pop(); showTop(); } };
 
   const close = () => {
     LOC.l = null;
@@ -1171,6 +1235,7 @@ function openLesson(l, at, quote) {
       post({ mopo: "reset", list: marks() });
       if (quote) setTimeout(() => post({ mopo: "focus", text: quote }), 250);
     }
+    if (d.mopo === "opendoc") { openDocUrl(d.url); return; }
     if (d.mopo === "quote") {
       if (v.classList.contains("nonotes")) {           /* панель была спрятана — показываем, иначе заметка «пропадёт» */
         v.classList.remove("nonotes"); v.querySelector('[data-a="notes"]').classList.add("on");
