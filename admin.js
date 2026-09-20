@@ -939,9 +939,10 @@ async function admSettings() {
     b.disabled = true; b.textContent = "Проверяем…";
     try {
       const st = await api("admin.prepStat");
-      $("#prepstat").innerHTML = st.left
+      $("#prepstat").innerHTML = (st.left
         ? `<b class="inl">Копии устарели у ${st.left} из ${st.total} листов.</b> Готовых: ${st.ready}.`
-        : `Все ${st.total} листов готовы — сотрудники открывают таблицы сразу.`;
+        : `Все ${st.total} листов готовы — сотрудники открывают таблицы сразу.`) +
+        (st.store === false ? ` <span class="hint tiny">Копии хранятся временно (около 6 часов): у сервиса нет разрешения сохранять файлы на Диск.</span>` : "");
     } catch (e) { $("#prepstat").textContent = "Не удалось пересчитать: " + (e.message || e); }
     b.disabled = false; b.textContent = "Проверить, что устарело";
   };
@@ -975,7 +976,7 @@ async function admSettings() {
         if (!r) throw err || new Error("Сервер не ответил");
         total = r.total || total;
         (r.items || []).forEach(x => {
-          if (x.state === "ready") { ready++; last = x.title; }
+          if (x.state === "ready" || x.state === "cached") { ready++; last = x.title; }
           else if (x.state === "skip") skip++;
           else bad.push(x.title + (x.why ? " — " + x.why : ""));
         });
