@@ -853,7 +853,7 @@ async function admQuestions(box) {
 const PREP = { run: false, stop: false };
 /* ---------- настройки ---------- */
 async function admSettings() {
-  const host = $("#admbody");
+  const host = $("#admbody"), dev = APP.user.role === "dev";
   host.innerHTML = `<div class="card"><h2>Настройки</h2>
     <p class="lead">Вопросы РОПу и запросы «Забыли пароль?» всегда приходят в кабинет. Чтобы их увидели быстрее,
       кабинет предложит сотруднику продублировать сообщение в рабочую группу WhatsApp с готовым текстом.</p>
@@ -862,20 +862,28 @@ async function admSettings() {
     <p class="hint tiny">Кабинет скопирует готовый текст и откроет эту группу. Ссылку берут в WhatsApp: группа → «Пригласить по ссылке».
       Её увидит только тот, кто ввёл существующий логин. Если ссылка утечёт — сбросьте её там же и вставьте новую.</p>
     <div class="foot"><button class="btn" id="csave" type="button">Сохранить</button></div></div>
+
     <div class="card" id="drvcard"><h2>Доступ сервиса к материалам</h2>
       <p class="lead">Документы, таблицы и презентации сотрудники смотрят через кабинет — копией для чтения, без входа в Google.
         Для этого у почты, от которой работает кабинет, должен быть доступ к файлам. Видео Google Диск через кабинет не пропускает —
         их открываем «по ссылке, только просмотр» одной кнопкой.</p>
-      <div class="foot"><button class="btn white" id="drvcheck" type="button">Проверить доступ к файлам</button>
-        <button class="btn white" id="prep" type="button">Подготовить копии таблиц</button>
-        <label class="f inline"><input type="checkbox" id="prepall"> перепечатать все заново</label>
-        ${APP.user.role === "dev" ? '<label class="f inline"><input type="checkbox" id="prepauto" disabled> обновлять копии ночью автоматически</label>' : ""}</div>
-      <p class="hint tiny">«Подготовить копии» — сервис заранее печатает каждый лист таблиц в PDF и хранит у себя на Диске.
-        Уже готовые листы пропускаются, печатаются только новые и изменённые, так что повторные запуски быстрые.
-        Кнопку можно нажать ещё раз, чтобы остановиться, и потом продолжить с того же места.</p>
-      <div id="prepres"></div>
+      <div class="foot"><button class="btn white" id="drvcheck" type="button">Проверить доступ к файлам</button></div>
       <div id="drvres"></div></div>
-    ${APP.user.role === "dev" ? `<div class="card" id="acccard"><h2>Доступ сотрудников к самим документам</h2>
+
+    <div class="card" id="prepcard"><h2>Обновление копий таблиц</h2>
+      <p class="lead">Каждый лист таблицы сервис печатает в PDF и хранит у себя — поэтому таблицы открываются сразу.
+        Если таблицу поправили, копия устаревает: сервис перепечатает её сам при следующем открытии, но тогда первый сотрудник подождёт.
+        Кнопка ниже готовит копии заранее.</p>
+      <div id="prepstat" class="hint">Смотрим, что готово…</div>
+      <div class="foot"><button class="btn white" id="prep" type="button">Подготовить копии таблиц</button>
+        <button class="btn white" id="prepcheck" type="button">Пересчитать</button>
+        <label class="f inline"><input type="checkbox" id="prepall"> перепечатать все заново</label>
+        ${dev ? '<label class="f inline"><input type="checkbox" id="prepauto"> обновлять копии ночью автоматически</label>' : ""}</div>
+      <p class="hint tiny">Готовые листы пропускаются — печатаются только новые и изменённые. Во время работы кнопка становится
+        «Остановить»: можно прерваться и продолжить позже с того же места.${dev ? " Ночное обновление запускается в 3:00 и само доделывает остаток." : ""}</p>
+      <div id="prepres"></div></div>
+
+    ${dev ? `<div class="card" id="acccard"><h2>Доступ сотрудников к самим документам</h2>
       <p class="lead">Обычно сотрудник видит только копии в кабинете. Когда обучение пройдено, можно открыть ему чтение самих файлов
         на Диске — выбрать нужные галочками и нажать «Открыть». Так же одной кнопкой доступ закрывается.</p>
       <div class="tbar">
@@ -884,62 +892,98 @@ async function admSettings() {
       </div>
       <div class="foot"><button class="btn white" id="accload" type="button">Показать список файлов</button></div>
       <div id="accres"></div></div>` : ""}`;
+
   $("#drvcheck").onclick = () => drvStatus();
   if ($("#accload")) $("#accload").onclick = () => accFiles();
-  const prepStat = async () => {
+  $("#csave").onclick = async () => {
+    const g = $("#wagroup").value.trim();
+    if (g && !/^https:\/\/chat\.whatsapp\.com\/\S+$/.test(g)) return toast("Ссылка на группу должна начинаться с https://chat.whatsapp.com/");
     try {
-      const st = await api("admin.prepStat");
-      $("#prepres").innerHTML = `<p class="hint">Листов в таблицах: ${st.total}. Готовых копий: ${st.ready}.
-        ${st.left ? `<b class="inl">Копии устарели у ${st.left} — нажмите «Подготовить копии таблиц».</b>`
-                  : "Всё готово — сотрудники открывают таблицы сразу."}</p>`;
-      const auto = $("#prepauto");
-      if (auto) { auto.checked = !!st.auto; auto.disabled = false; }
-    } catch (e) { /* не страшно: покажем после нажатия */ }
+      await api("admin.setting", { key: "waGroup", value: g });
+      if (PR.progress) PR.progress.waGroup = g;
+      toast("Сохранено");
+    } catch (e) { fail(e); }
   };
-  prepStat();
+
+  /* быстрый ответ: включено ли ночное обновление и что известно о копиях */
+  (async () => {
+    try {
+      const st = await api("admin.prepAutoStat");
+      if ($("#prepauto")) $("#prepauto").checked = !!st.auto;
+      const l = st.light;
+      $("#prepstat").innerHTML = l
+        ? (l.left ? `<b class="inl">Копии устарели у ${l.left} из ${l.total} листов.</b> Нажмите «Подготовить копии таблиц».`
+                  : `Все ${l.total} листов готовы — сотрудники открывают таблицы сразу.`)
+        : `Сколько листов готово — нажмите «Пересчитать» (сервис пройдёт по таблицам, это до минуты).`;
+    } catch (e) { $("#prepstat").textContent = "Не удалось узнать состояние копий: " + (e.message || e); }
+  })();
+
   if ($("#prepauto")) $("#prepauto").onchange = async () => {
     const box = $("#prepauto");
     box.disabled = true;
-    try { await api("admin.prepAuto", { on: box.checked }); toast(box.checked ? "Ночное обновление включено — в 3:00" : "Ночное обновление выключено"); }
+    try { await api("admin.prepAuto", { on: box.checked }); toast(box.checked ? "Ночное обновление включено — каждый день в 3:00" : "Ночное обновление выключено"); }
     catch (e) { fail(e); box.checked = !box.checked; }
     box.disabled = false;
   };
+
+  $("#prepcheck").onclick = async () => {
+    const b = $("#prepcheck");
+    b.disabled = true; b.textContent = "Считаем…";
+    try {
+      const st = await api("admin.prepStat");
+      $("#prepstat").innerHTML = st.left
+        ? `<b class="inl">Копии устарели у ${st.left} из ${st.total} листов.</b> Готовых: ${st.ready}.`
+        : `Все ${st.total} листов готовы — сотрудники открывают таблицы сразу.`;
+    } catch (e) { $("#prepstat").textContent = "Не удалось пересчитать: " + (e.message || e); }
+    b.disabled = false; b.textContent = "Пересчитать";
+  };
+
   $("#prep").onclick = async () => {
     const b = $("#prep"), box = $("#prepres"), force = $("#prepall") && $("#prepall").checked;
-    if (PREP.run) { PREP.stop = true; return; }                    /* второе нажатие — остановить */
+    if (PREP.run) { PREP.stop = true; b.textContent = "Останавливаем…"; return; }
     PREP.run = true; PREP.stop = false;
     b.textContent = "Остановить";
-    const t0 = Date.now(), mmss = ms => Math.floor(ms / 60000) + " мин " + Math.round(ms % 60000 / 1000) + " сек";
-    let from = 0, ready = 0, skip = 0, bad = [], total = 0, last = "";
+    const t0 = Date.now();
+    const mmss = ms => (ms >= 60000 ? Math.floor(ms / 60000) + " мин " : "") + Math.round(ms % 60000 / 1000) + " сек";
+    let ready = 0, skip = 0, bad = [], total = 0, from = 0, last = "", note = "запрашиваем список листов…";
     const paint = () => {
       const seen = ready + skip + bad.length, gone = Date.now() - t0;
-      const per = ready ? gone / ready : 0;                          /* считаем по реально напечатанным */
-      const left = Math.max(0, total - seen);
-      box.innerHTML = `<p class="hint"><b>Подготовлено: ${ready}</b> · уже были готовы: ${skip} · осталось: ${left} из ${total}.<br>
-        Идёт ${mmss(gone)}${per && left ? " · осталось примерно " + mmss(per * left) : ""}.<br>
-        ${last ? "Сейчас: " + esc(last) : ""}${bad.length ? "<br>Не получилось: " + bad.length : ""}</p>`;
+      const per = ready ? gone / ready : 0, left = Math.max(0, total - seen);
+      box.innerHTML = `<p class="hint"><b>Напечатано: ${ready}</b>${skip ? " · уже были готовы: " + skip : ""}${total ? " · осталось: " + left + " из " + total : ""}<br>
+        Идёт ${mmss(gone)}${per && left ? " · осталось примерно " + mmss(per * left) : ""}<br>
+        ${esc(note)}${last ? "<br>Последний готовый: " + esc(last) : ""}${bad.length ? "<br>Не получилось: " + bad.length : ""}</p>`;
     };
+    paint();
+    const tick = setInterval(paint, 1000);              /* время идёт, даже пока ждём ответ сервера */
     try {
       do {
-        let r = null, tries = 0;
-        while (!r && tries < 3) {                                   /* сбой одного запроса — не повод бросать всю подготовку */
+        note = "печатаем лист… первый лист большой таблицы может готовиться до минуты";
+        let r = null, tries = 0, err = null;
+        while (!r && tries < 3) {
           tries++;
-          try { r = await api("admin.prepare", { from: from, count: 2, force: force }); }
-          catch (e) { if (tries >= 3) throw e; await new Promise(res => setTimeout(res, 1500 * tries)); }
+          try { r = await api("admin.prepare", { from: from, count: 1, force: force }); }
+          catch (e) { err = e; note = "сервер не ответил, пробуем ещё раз (" + tries + " из 3)"; paint(); await new Promise(res => setTimeout(res, 1500 * tries)); }
         }
+        if (!r) throw err || new Error("Сервер не ответил");
         total = r.total || total;
         (r.items || []).forEach(x => {
           if (x.state === "ready") { ready++; last = x.title; }
           else if (x.state === "skip") skip++;
           else bad.push(x.title + (x.why ? " — " + x.why : ""));
         });
+        note = "";
         paint();
         from = r.next || 0;
       } while (from && !PREP.stop);
-      box.insertAdjacentHTML("beforeend", `<p class="hint">${PREP.stop ? "Остановлено." : "Готово."} Напечатано ${ready} за ${mmss(Date.now() - t0)}.
-        ${bad.length ? "Не получилось: " + bad.length + "." : ""}</p>` +
-        (bad.length ? `<div class="note warn"><ul>${bad.slice(0, 12).map(x => `<li>${esc(x)}</li>`).join("")}</ul></div>` : ""));
-    } catch (e) { fail(e); box.insertAdjacentHTML("beforeend", `<p class="hint">Остановились на ${ready + skip} из ${total}. Нажмите кнопку ещё раз — продолжим с того же места.</p>`); }
+      note = PREP.stop ? "Остановлено. Нажмите кнопку ещё раз — продолжим с этого места." : "Готово.";
+      paint();
+      if (bad.length) box.insertAdjacentHTML("beforeend",
+        `<div class="note warn">Не удалось напечатать ${bad.length}:<ul>${bad.slice(0, 12).map(x => `<li>${esc(x)}</li>`).join("")}</ul></div>`);
+    } catch (e) {
+      note = "Остановились: " + (e.message || e) + ". Нажмите кнопку ещё раз — продолжим с этого места.";
+      paint();
+    }
+    clearInterval(tick);
     PREP.run = false; b.disabled = false; b.textContent = "Подготовить копии таблиц";
   };
 }
