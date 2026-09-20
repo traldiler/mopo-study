@@ -811,13 +811,13 @@ function watermark(html) {
    а сервер в фоне проверяет, не обновили ли оригинал. */
 function gdocKind(l) {
   const u = String(l.url || "");
-  if (/docs\.google\.com\/spreadsheets\//.test(u)) return "html";
+  if (/docs\.google\.com\/spreadsheets\//.test(u)) return "sheet";
   if (/docs\.google\.com\/document\//.test(u)) return "doc";
   if (/docs\.google\.com\/presentation\//.test(u)) return "pdf";
   if (l.kind !== "видео" && /drive\.google\.com\/(file\/d\/|open\?id=)/.test(u)) return "pdf";
   return "";
 }
-const DOCC = "mopo-docs-v6";                           /* v2: таблицы 1 в 1 и кликабельное оглавление — старые копии не берём */
+const DOCC = "mopo-docs-v7";                           /* v2: таблицы 1 в 1 и кликабельное оглавление — старые копии не берём */
 async function docCacheGet(id) { try { const r = await (await caches.open(DOCC)).match("/__doc/" + encodeURIComponent(id)); return r ? await r.json() : null; } catch (e) { return null; } }
 async function docCachePut(id, v) { try { await (await caches.open(DOCC)).put("/__doc/" + encodeURIComponent(id), new Response(JSON.stringify(v), { headers: { "Content-Type": "application/json" } })); } catch (e) { } }
 const docPage = (text) => `<body style="font:15px/1.5 Arial,sans-serif;color:#232227;padding:28px">${text}</body>`;
@@ -1095,7 +1095,73 @@ function pdfScroll(toc) {
     try{ var ro=new ResizeObserver(function(){ if(sc.clientWidth&&Math.abs(fit-fitScale())>0.01){ fit=fitScale(); layout(); } }); ro.observe(sc); }catch(e){}
   })().catch(function(e){ document.getElementById("pages").innerHTML='<div id="msg">Не удалось показать файл: '+e.message+'</div>'; });<\/script></body></html>`;
 }
-function renderDoc(frame, r) {
+/* таблица: вкладки листов рисует кабинет, сам лист приходит отдельным запросом — большие таблицы иначе не успевают собраться */
+function sheetShell(names) {
+  const tabs = (names || []).map((n, i) => `<button type="button" data-i="${i}"${i ? "" : ' class="on"'}>${esc(n)}</button>`).join("");
+  return `<!doctype html><html><head><meta charset="utf-8"><style>
+  html,body{margin:0;height:100%;background:#fff;font:13px Arial,sans-serif;color:#232227}
+  #bar{position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px 12px;background:#F7F6F4;border-bottom:1px solid #E5E3DF}
+  #bar button{border:1px solid #E5E3DF;background:#fff;border-radius:999px;padding:5px 12px;font:12px Arial;cursor:pointer;color:#232227}
+  #bar button.on{background:#232227;color:#fff;border-color:#232227}
+  #bar .z{margin-left:auto;display:flex;gap:6px;align-items:center;font:12px Arial;color:#6D6B72}
+  #wrap{position:absolute;inset:44px 0 0 0;overflow:auto;padding:12px}#inner{transform-origin:0 0}
+  table{border-collapse:collapse;table-layout:fixed}
+  td{border:1px solid #E1DFDB;padding:4px 6px;vertical-align:top;font-size:12px;line-height:1.35;overflow-wrap:anywhere}
+  .cut{color:#6D6B72;font-size:12px;margin:10px 2px}
+  .wait{padding:24px;color:#6D6B72}</style></head><body>
+  <div id="bar">${tabs || "<b>Лист</b>"}<span class="z"><button type="button" id="zm">−</button><span id="zv">100%</span>
+    <button type="button" id="zp">+</button><button type="button" id="zf">По ширине</button></span></div>
+  <div id="wrap"><div id="inner"><div class="wait" id="w">Загружаем лист…</div></div></div>
+  <script>(function(){
+    var z=1, wrap=document.getElementById("wrap"), inner=document.getElementById("inner"), cache={}, cur=0;
+    function set(){ inner.style.transform="scale("+z+")"; inner.style.width=(100/z)+"%"; document.getElementById("zv").textContent=Math.round(z*100)+"%"; }
+    function step(d){ z=Math.min(2.5,Math.max(.25,Math.round((z+d)*20)/20)); set(); }
+    function fit(){ var t=inner.querySelector("table"); if(!t) return; z=Math.min(1,Math.max(.25,(wrap.clientWidth-26)/t.scrollWidth)); set(); }
+    document.getElementById("zm").onclick=function(){step(-.1)};
+    document.getElementById("zp").onclick=function(){step(.1)};
+    document.getElementById("zf").onclick=fit;
+    wrap.addEventListener("wheel",function(e){ if(!e.ctrlKey&&!e.metaKey) return; e.preventDefault(); step(e.deltaY>0?-.05:.05); },{passive:false});
+    var g0=1; document.addEventListener("gesturestart",function(e){e.preventDefault();g0=z;});
+    document.addEventListener("gesturechange",function(e){e.preventDefault();z=Math.min(2.5,Math.max(.25,g0*e.scale));set();});
+    document.addEventListener("gestureend",function(e){e.preventDefault();});
+    var d0=0,z0=1,dist=function(t){var dx=t[0].clientX-t[1].clientX,dy=t[0].clientY-t[1].clientY;return Math.sqrt(dx*dx+dy*dy);};
+    wrap.addEventListener("touchstart",function(e){ if(e.touches.length===2){ d0=dist(e.touches); z0=z; } },{passive:true});
+    wrap.addEventListener("touchmove",function(e){ if(e.touches.length===2&&d0){ e.preventDefault(); z=Math.min(2.5,Math.max(.25,z0*dist(e.touches)/d0)); set(); } },{passive:false});
+    function show(i){
+      cur=i;
+      [].slice.call(document.querySelectorAll("#bar [data-i]")).forEach(function(b){ b.classList.toggle("on",+b.dataset.i===i); });
+      if(cache[i]!==undefined){ inner.innerHTML=cache[i]; wrap.scrollTop=0; wrap.scrollLeft=0; fit(); return; }
+      inner.innerHTML='<div class="wait">Загружаем лист… первый раз это может занять до минуты</div>';
+      parent.postMessage({mopo:"needsheet",i:i},"*");
+    }
+    window.addEventListener("message",function(e){
+      var d=e.data&&e.data.mopoSheet; if(!d) return;
+      cache[d.i]=d.error?'<div class="wait">Не удалось открыть лист: '+d.error+'</div>':d.html;
+      if(d.i===cur){ inner.innerHTML=cache[d.i]; wrap.scrollTop=0; wrap.scrollLeft=0; fit(); }
+    });
+    [].slice.call(document.querySelectorAll("#bar [data-i]")).forEach(function(b){ b.onclick=function(){ show(+b.dataset.i); }; });
+    window.addEventListener("resize",function(){ setTimeout(fit,100); });
+    set(); show(0);
+  })();<\/script></body></html>`;
+}
+function renderDoc(frame, r, ref) {
+  if (r.kind === "sheet") {
+    const mt = r.mt || "";
+    const want = async i => {
+      const ck = "sh:" + JSON.stringify(ref || {}) + ":" + mt + ":" + i;
+      let c = await docCacheGet(ck);
+      if (!c) { c = await api("doc.sheet", Object.assign({ i: i }, ref || {})); await docCachePut(ck, c); }
+      return c.html;
+    };
+    const give = async e => {
+      if (e.source !== frame.contentWindow || !e.data || e.data.mopo !== "needsheet") return;
+      try { frame.contentWindow.postMessage({ mopoSheet: { i: e.data.i, html: await want(e.data.i) } }, "*"); }
+      catch (err) { try { frame.contentWindow.postMessage({ mopoSheet: { i: e.data.i, error: String(err.message || err) } }, "*"); } catch (e2) { } }
+    };
+    window.addEventListener("message", give);
+    frame.srcdoc = watermark(sheetShell(r.sheets || []));
+    return;
+  }
   let html = r.html || "";
   if (r.kind === "html" && r.simple) {                  /* выгрузку «как у Google» получить не удалось — честно показываем упрощённый вид и причину */
     const note = `<div style="font:12px/1.4 Arial;background:#FFF3D6;color:#8A5A00;padding:8px 12px;border-bottom:1px solid #F2D9A6">Упрощённый вид таблицы: оформление Google получить не удалось${r.why ? " (" + esc(r.why) + ")" : ""}.</div>`;
@@ -1105,6 +1171,11 @@ function renderDoc(frame, r) {
   let bytes;
   try { bytes = b64bytes(r.pdf); }
   catch (e) {
+    if (r && r.service) {
+      frame.srcdoc = docPage("Google не успел подготовить этот файл и вернул служебный ответ.<br><br>" +
+        "Закройте материал и откройте ещё раз — со второго раза обычно открывается. Если файл очень большой, дайте серверу минуту.");
+      return;
+    }
     const info = "тип: " + esc(String(r.kind)) + ", документ: " + (r.doc ? "да" : "нет") +
       ", файл: " + esc(typeof r.pdf) + ", длина: " + (r.pdf ? String(r.pdf).length : 0) +
       ", начало: " + esc(String(r.pdf || "").slice(0, 30));
@@ -1131,14 +1202,14 @@ function b64bytes(b64) {
 }
 async function loadDoc(frame, l) {
   const cached = await docCacheGet(l.id);
-  if (cached) renderDoc(frame, cached);
+  if (cached) renderDoc(frame, cached, { lessonId: l.id });
   else frame.srcdoc = docWait(l.title);
   try {
     const r = await api("doc.get", { lessonId: l.id, have: cached ? cached.mt : "" });
     if (r.same) return;
     await docCachePut(l.id, r);
     if (!frame.isConnected) return;
-    renderDoc(frame, r);
+    renderDoc(frame, r, { lessonId: l.id });
     if (cached) toast("Документ обновили — показываем свежую версию");
   } catch (e) { if (!cached && frame.isConnected) frame.srcdoc = docPage("Не удалось открыть документ: " + esc(e.message)); }
 }
@@ -1146,13 +1217,13 @@ async function loadDoc(frame, l) {
 async function loadDocUrl(frame, url, title) {
   const key = "u:" + url;
   const cached = await docCacheGet(key);
-  if (cached) renderDoc(frame, cached);
+  if (cached) renderDoc(frame, cached, { url: url });
   else frame.srcdoc = docWait(title || "документ");
   try {
     const r = await api("doc.get", { url: url, have: cached ? cached.mt : "" });
     if (r.same) return cached;
     await docCachePut(key, r);
-    if (frame.isConnected) renderDoc(frame, r);
+    if (frame.isConnected) renderDoc(frame, r, { url: url });
     return r;
   } catch (e) {
     if (!cached && frame.isConnected) frame.srcdoc = docPage("Не удалось открыть документ: " + esc(e.message));
@@ -1227,7 +1298,7 @@ function openLesson(l, at, quote) {
             </div>
             <p class="hint tiny">Счётчик идёт по вашим кликам по видео: Google Диск не сообщает, на какой минуте плеер. Пока видео грузится и после перемотки время может разойтись — поправьте его в поле вручную.</p>` : ""}
           ${textual ? '<p class="hint tiny">Выделите фразу: цветной маркер — в «Выделения», кнопка «Заметка» — сюда.</p>' : ""}
-          ${gk === "html" ? '<p class="hint tiny">Таблица показана вкладками, как в Google: листы сверху, масштаб − / + или щипок на трекпаде. Нужное выделите и скопируйте в заметку.</p>'
+          ${gk === "sheet" ? '<p class="hint tiny">Таблица показана вкладками, как в Google: листы сверху, масштаб − / + или щипок на трекпаде. Нужное выделите и скопируйте в заметку.</p>'
             : gk === "doc" ? '<p class="hint tiny">Документ показан 1 в 1, как в Google: прокрутка колесом, масштаб − / + внизу или щипком, оглавление слева. Выделите фразу — цветной маркер или кнопка «Заметка».</p>'
             : gk === "pdf" ? '<p class="hint tiny">Листайте кликом по левому или правому краю, кнопками внизу или стрелками ← →. Текст на слайде можно выделить и скопировать в заметку.</p>'
             : slides ? '<p class="hint tiny">Текст со слайдов скопировать нельзя — Google показывает их картинками. Листайте стрелками ← → на клавиатуре или под слайдом.</p>'
@@ -1266,6 +1337,10 @@ function openLesson(l, at, quote) {
   };
   const openDocUrl = url => {
     const u = String(url || "");
+    if (/drive\.google\.com\/drive\/folders\//.test(u)) {        /* папка Диска: показать её в кабинете нельзя */
+      toast("Это папка на Google Диске — в кабинете открываются только документы. Напишите РОПу, если нужен файл из неё");
+      return;
+    }
     if (chain.some(x => x.url === u)) return;                 /* уже открыт — не зацикливаемся */
     chain.push({ title: "Документ по ссылке", url: u });
     showTop();
