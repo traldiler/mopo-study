@@ -97,8 +97,9 @@ async function admStudents() {
       let force = false;
       if (!st.examAllowed && notReady.length) {
         const ok = await ask({ title: "Блоки ещё не закрыты", danger: true, ok: "Всё равно допустить", cancel: "Отмена",
-          text: `У сотрудника не закрыто блоков: <b>${notReady.length}</b> (${notReady.slice(0, 6).map(b => blockNum(b.n)).join(", ")}${notReady.length > 6 ? "…" : ""}).<br>
-                 Обычно к экзамену допускают после всех блоков. Открыть доступ досрочно?` });
+          text: `<p>У сотрудника не закрыто блоков: <b class="inl">${notReady.length}</b>:</p>
+                 <ul class="notready">${notReady.map(b => `<li><b>${blockNum(b.n)}.</b> ${esc(b.title)}</li>`).join("")}</ul>
+                 <p>Обычно к экзамену допускают после всех блоков. Открыть доступ досрочно?</p>` });
         if (!ok) return;
         force = true;
       }
@@ -344,7 +345,7 @@ async function admUsers() {
     (shown.length ? shown.map((u, i) => `<tr class="${u.archived ? "arch" : ""}"><td><span class="ucell">${avatarHtml(u, 26)}${esc(u.fio)}</span></td><td>${esc(u.login)}</td>
       <td>${roleName(u)}</td><td>${u.email ? `<a href="mailto:${esc(u.email)}">${esc(u.email)}</a>` : '<span class="hint">—</span>'}</td>
       <td>${u.birthday ? fmtDate(u.birthday) : '<span class="hint">—</span>'}</td>
-      <td>${STATUS_TAG[userStatus(u)]}${u.archived && u.archivedAt ? `<div class="hint tiny">с ${dayRu(u.archivedAt)}</div>` : ""}</td>
+      <td>${STATUS_TAG[userStatus(u)]}${u.locked ? '<div><span class="tag fail">вход заблокирован</span></div>' : ""}${u.archived && u.archivedAt ? `<div class="hint tiny">с ${dayRu(u.archivedAt)}</div>` : ""}</td>
       <td><button class="btn small white" data-i="${i}" type="button">Управлять</button></td></tr>`).join("")
     : `<tr><td colspan="7" class="hint">${ADM.users === "arch" ? "В архиве пока никого." : "Сотрудников пока нет."}</td></tr>`);
   host.querySelector("#utbl").appendChild(t);
@@ -357,7 +358,10 @@ function userForm(u, reset) {
   const st = u ? userStatus(u) : "active", self = u && APP.user && u.id === APP.user.id;
   back.innerHTML = `<div class="modal" role="dialog" aria-modal="true" style="max-width:560px">
     <b>${u ? esc(u.fio) : dev ? "Новая учётная запись" : "Новый МОПО"}</b>
-    ${u ? `<div class="ustat">${STATUS_TAG[st]}</div>` : ""}
+    ${u ? `<div class="ustat">${STATUS_TAG[st]}${u.locked ? ' <span class="tag fail">вход заблокирован</span>' : ""}</div>` : ""}
+    ${u && u.locked ? `<div class="note warn">Вход закрыт после 5 неверных попыток пароля${u.lockedAt ? " — " + esc(dayRu(u.lockedAt)) : ""}.
+      ${dev ? "Чтобы снять: сгенерируйте новый пароль и сохраните — блокировка снимется, пароль передайте сотруднику."
+            : "Снять блокировку может только разработчик — напишите ему во «Вопросы разработчику»."}</div>` : ""}
     <label class="f">Имя и фамилия</label><input type="text" id="ufio" value="${esc(u ? u.fio : "")}">
     <label class="f">Логин</label><input type="text" id="ulogin" value="${esc(u ? u.login : "")}" ${u && !dev ? "disabled" : ""}>
     ${u && dev ? '<p class="hint tiny">Логин можно изменить. Сотрудник останется в кабинете и не потеряет прогресс — но войти в следующий раз сможет только с новым логином, передайте его.</p>'

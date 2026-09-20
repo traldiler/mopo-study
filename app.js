@@ -363,6 +363,9 @@ async function logout(silent) {
   try { if (token) await apiRaw("logout", { token: token }); } catch (_) { }
   APP.token = ""; APP.user = null; localStorage.removeItem("mopo-token");
   snapDrop(); PR.program = null; PR.progress = null; MAT_HEX = ""; MAT_KEY = null;
+  MYQ.data = null; MYQ.at = 0; PR.qOver = null; PR.examX = null;   /* чужие вопросы и тесты не должны достаться следующему */
+  if (typeof QZ !== "undefined") { QZ.data = null; QZ.cur = null; }
+  if (typeof EX !== "undefined" && !EX.running) EX.data = null;
   try { caches.delete(DOCC); } catch (e) { }
   screenLogin();
 }
@@ -412,14 +415,14 @@ function renderNav() {
     : [["adm:students", "Ученики"], ["adm:attempts", "Экзамены"], ["adm:questions", dev ? "Вопросы МОПОв" : "Вопросы"]]
         .concat(dev ? [["adm:devq", "Вопросы РОПов"]] : [["questions", "Разработчику"]])
         .concat([["adm:users", "Сотрудники"], ["adm:materials", "Материалы"], ["adm:settings", "Настройки"]]);
-  const новыеОтветы = mopo ? qFresh().length : 0;
+  const новыеОтветы = qFresh().length;                 /* у МОПО — ответы РОПа, у РОПа — ответы разработчика */
   items.forEach(([k, t]) => {
     const b = el("button", "", t); b.type = "button"; b.dataset.k = k;
     b.setAttribute("aria-current", APP.screen === k ? "true" : "false");
     b.onclick = () => examNow && k !== "exam" ? leaveExam(k) : go(k);
     if (k === "questions" && новыеОтветы) {            /* РОП ответил — подсказываем зайти */
       const i = el("i", "badge good", новыеОтветы > 99 ? "99+" : String(новыеОтветы));
-      i.title = plural(новыеОтветы, "новый ответ", "новых ответа", "новых ответов") + " от РОПа";
+      i.title = plural(новыеОтветы, "новый ответ", "новых ответа", "новых ответов") + (mopo ? " от РОПа" : " от разработчика");
       b.appendChild(i);
     }
     n.appendChild(b);
@@ -1740,10 +1743,10 @@ async function screenQuestions() {
   } catch (e) { return fail(e); }
   const list = (r.questions || []).slice().sort((a, b) => String(b.at).localeCompare(String(a.at)));
   const nAns = list.filter(q => q.answer).length, nWait = list.length - nAns;
-  const ВИДЕЛ = staff ? new Set() : qSeen();           /* что сотрудник уже открывал — до отметки ниже */
+  const ВИДЕЛ = qSeen();                               /* что уже открывали — до отметки ниже */
   const плюрал = n => plural(n, "новый ответ", "новых ответа", "новых ответов");
   const новых = list.filter(q => q.answer && !ВИДЕЛ.has(String(q.id))).length;
-  if (!staff) { qMarkSeen(); renderNav(); }            /* зашёл — значок в меню гаснет */
+  qMarkSeen(); renderNav();                            /* зашли — значок в меню гаснет */
   $("#app").innerHTML = `<div class="card">
       <div class="qhead"><div><h2>${staff ? "Вопросы разработчику" : "Мои вопросы"}</h2>
         <p class="lead">${staff ? "Что-то не работает, нужна доработка или новый раздел — напишите здесь. Ответ придёт сюда же."
@@ -1768,7 +1771,7 @@ async function screenQuestions() {
     if (!list.length) { host.innerHTML = '<p class="hint">Вопросов пока нет. Кнопка «Спросить РОПа» есть в каждом материале.</p>'; return; }
     if (!f.length) { host.innerHTML = '<p class="hint">В этом разделе пусто.</p>'; return; }
     f.forEach(q => {
-      const свежий = !staff && q.answer && !ВИДЕЛ.has(String(q.id));
+      const свежий = q.answer && !ВИДЕЛ.has(String(q.id));
       const c = el("div", "qitem " + (q.answer ? "answered" : "waiting") + (свежий ? " fresh" : ""));
       c.innerHTML = `<div class="nc-head">
           <span class="tag ${q.answer ? "ok" : "wait"}">${q.answer ? (свежий ? "новый ответ" : "есть ответ") : "ждёт ответа"}</span>
@@ -2283,7 +2286,7 @@ async function start() {
       if (!APP.demo) { outLoad(); applyBoot(b); outFlush(); }
     } else if (!APP.demo) { outLoad(); outFlush(); }
     if (!APP.demo && isStaff(APP.user)) setTimeout(() => adminPrefetch(), 1500);
-    if (!isStaff(APP.user) && !MYQ.data) setTimeout(() => {          /* ответы РОПа — чтобы значок в меню загорелся сразу */
+    if (!MYQ.data) setTimeout(() => {                                /* ответы на свои вопросы — чтобы значок загорелся сразу */
       api("my.questions").then(x => { MYQ.data = x; MYQ.at = Date.now(); renderNav(); }).catch(() => { });
     }, 1200);
     if (!(await locRestore().catch(() => false))) go(isStaff(APP.user) && staffMode() === "admin" ? "adm:students" : "cabinet");
@@ -2496,12 +2499,28 @@ async function demoApi(action, d) {
 async function demoCall(action, d) {
   switch (action) {
     case "login": {
+      const ключ = Object.keys(DEMO.users).filter(k => String(DEMO.users[k].login).toLowerCase() === String(d.login || "").toLowerCase())[0];
+      const цель = ключ && DEMO.users[ключ];
+      if (цель && цель.lockedAt) return { error: "Вход заблокирован после 5 неверных попыток. Снять блокировку может только разработчик — он выдаст новый пароль.", code: "locked" };
       const who = Object.keys(DEMO.users).filter(k => {
         const u = DEMO.users[k];
         return String(u.login).toLowerCase() === String(d.login || "").toLowerCase() && (u.demoPass ? u.demoPass === d.password : d.password === u.login);
       })[0];
-      if (!who) return { error: "В демо три входа: demo / demo — МОПО, admin / admin — РОП, dev / dev — разработчик" };
+      if (!who) {
+        if (цель) {                                        /* логин есть, пароль не тот — считаем промахи */
+          const промахов = (Number(цель.fails) || 0) + 1;
+          цель.fails = промахов; demoKeep();
+          if (промахов >= 5) {
+            цель.lockedAt = new Date().toISOString(); demoKeep();
+            return { error: "Вход заблокирован: 5 неверных попыток подряд. Обратитесь к разработчику — он выдаст новый пароль.", code: "locked" };
+          }
+          const осталось = 5 - промахов;
+          return { error: "Неверный логин или пароль. " + (осталось === 1 ? "Осталась 1 попытка, потом вход закроется." : "Осталось попыток: " + осталось + ".") };
+        }
+        return { error: "В демо три входа: demo / demo — МОПО, admin / admin — РОП, dev / dev — разработчик" };
+      }
       if (DEMO.users[who].active === false) return { error: "Доступ закрыт. Обратитесь к РОПу." };
+      if (Number(DEMO.users[who].fails) || 0) { DEMO.users[who].fails = 0; demoKeep(); }
       DEMO.who = who; APP.token = "demo-" + who;
       return { token: "demo-" + who, user: demoMe() };
     }
@@ -2712,7 +2731,8 @@ async function demoCall(action, d) {
     case "admin.attemptDel": DEMO.attempts = DEMO.attempts.filter(x => x.id !== d.id); return { ok: true };
     case "admin.attempt": return DEMO.attempts.filter(a => a.id === d.id)[0] || { answers: [] };
     case "admin.users": return { users: Object.keys(DEMO.users).map(k => Object.assign({ active: true, archived: false }, DEMO.users[k]))
-      .filter(u => demoMe().role === "dev" || u.role === "employee").map(u => { const c = Object.assign({}, u); delete c.demoPass; return c; }) };
+      .filter(u => demoMe().role === "dev" || u.role === "employee")
+      .map(u => { const c = Object.assign({}, u, { locked: !!u.lockedAt }); delete c.demoPass; return c; }) };
     case "admin.userStatus": {
       const u = Object.values(DEMO.users).filter(x => x.id === d.id)[0];
       if (!u) return { error: "Сотрудник не найден" };
@@ -2758,6 +2778,8 @@ async function demoCall(action, d) {
         }
         Object.assign(DEMO.users[k], { fio: d.data.fio, role: d.data.role || DEMO.users[k].role });
         if (d.data.password && !/^(emp|admin|dev)$/.test(k)) DEMO.users[k].demoPass = d.data.password;
+        if (d.data.password && me.role === "dev") { DEMO.users[k].fails = 0; DEMO.users[k].lockedAt = ""; }   /* новый пароль от разработчика снимает блокировку */
+        if (d.data.password && me.role !== "dev" && DEMO.users[k].lockedAt) return { error: "Вход заблокирован после неверных попыток — снять может только разработчик" };
         if (d.data.password) DEMO.resets.filter(r => r.userId === d.data.id && !r.doneAt).forEach(r => { r.doneAt = new Date().toISOString(); r.doneBy = me.fio; });
         return { ok: true, id: d.data.id };
       }

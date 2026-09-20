@@ -1628,3 +1628,7 @@ label.f{font-family:var(--f-text); font-size:13px; font-weight:600; letter-spaci
 .qitem.fresh{border-color:var(--ok-ink,#14795A); box-shadow:0 0 0 2px var(--ok-soft,#E4F4EC);}
 .qitem.fresh .tag.ok{background:var(--ok-ink,#14795A); color:#fff;}
 .note.ok{background:var(--ok-soft,#E4F4EC); color:var(--ok-ink,#14795A); border-radius:12px; padding:10px 12px; margin:10px 0;}
+
+/* список незакрытых блоков в окне допуска к экзамену */
+.notready{margin:6px 0 10px; padding-left:18px; max-height:40vh; overflow:auto;}
+.notready li{margin:2px 0; line-height:1.35;}
