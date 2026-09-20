@@ -2718,6 +2718,13 @@ async function demoCall(action, d) {
         const k = Object.keys(DEMO.users).filter(x => DEMO.users[x].id === d.data.id)[0];
         if (!k) return { error: "Сотрудник не найден" };
         if (me.role !== "dev" && DEMO.users[k].role !== "employee") return { error: "РОПов и разработчиков меняет разработчик" };
+        const логин = String(d.data.login || "").trim();                      /* как на сервере: логин меняет разработчик */
+        if (логин && логин.toLowerCase() !== String(DEMO.users[k].login).toLowerCase()) {
+          if (me.role !== "dev") return { error: "Логин меняет разработчик" };
+          if (/\s/.test(логин)) return { error: "В логине не должно быть пробелов" };
+          if (Object.values(DEMO.users).some(u => u.id !== d.data.id && String(u.login).toLowerCase() === логин.toLowerCase())) return { error: "Такой логин уже есть" };
+          DEMO.users[k].login = логин;
+        }
         Object.assign(DEMO.users[k], { fio: d.data.fio, role: d.data.role || DEMO.users[k].role });
         if (d.data.password && !/^(emp|admin|dev)$/.test(k)) DEMO.users[k].demoPass = d.data.password;
         if (d.data.password) DEMO.resets.filter(r => r.userId === d.data.id && !r.doneAt).forEach(r => { r.doneAt = new Date().toISOString(); r.doneBy = me.fio; });

@@ -359,7 +359,9 @@ function userForm(u, reset) {
     <b>${u ? esc(u.fio) : dev ? "Новая учётная запись" : "Новый МОПО"}</b>
     ${u ? `<div class="ustat">${STATUS_TAG[st]}</div>` : ""}
     <label class="f">Имя и фамилия</label><input type="text" id="ufio" value="${esc(u ? u.fio : "")}">
-    <label class="f">Логин</label><input type="text" id="ulogin" value="${esc(u ? u.login : "")}" ${u ? "disabled" : ""}>
+    <label class="f">Логин</label><input type="text" id="ulogin" value="${esc(u ? u.login : "")}" ${u && !dev ? "disabled" : ""}>
+    ${u && dev ? '<p class="hint tiny">Логин можно изменить. Сотрудник останется в кабинете и не потеряет прогресс — но войти в следующий раз сможет только с новым логином, передайте его.</p>'
+      : u ? '<p class="hint tiny">Логин менять может разработчик.</p>' : ""}
     <label class="f">${u ? "Новый пароль (оставьте пустым — не менять)" : "Пароль"}</label>
     <div class="pwrow"><input type="text" id="upass" placeholder="виден вам, чтобы передать сотруднику" autocomplete="off">
       <button class="btn small white" type="button" id="ugen">Сгенерировать</button>
@@ -396,8 +398,15 @@ function userForm(u, reset) {
     const d = { id: u ? u.id : "", fio: back.querySelector("#ufio").value.trim(), login: back.querySelector("#ulogin").value.trim(),
       password: pass.value, role: back.querySelector("#urole").value };
     if (!d.fio || (!u && (!d.login || !d.password))) { toast("Заполните имя, логин и пароль"); return; }
+    if (u && dev && !d.login) { toast("Логин не может быть пустым"); return; }
+    if (u && dev && /\s/.test(d.login)) { toast("В логине не должно быть пробелов"); return; }
+    const логинСменили = u && dev && d.login.toLowerCase() !== String(u.login).toLowerCase();
     if (d.password && d.password.length < 6) { toast("Пароль — минимум 6 знаков. Нажмите «Сгенерировать»"); return; }
-    try { await api("admin.userSave", { data: d }); close(); admUsers(); refreshBadges(); toast(d.password ? "Сохранено — передайте новый пароль сотруднику" : "Сохранено"); } catch (e) { fail(e); }
+    try {
+      await api("admin.userSave", { data: d }); close(); admUsers(); refreshBadges();
+      toast(логинСменили ? "Логин изменён на «" + d.login + "» — передайте его сотруднику"
+        : d.password ? "Сохранено — передайте новый пароль сотруднику" : "Сохранено");
+    } catch (e) { fail(e); }
   };
   const TXT = { blocked: ["Закрыть доступ?", "Сотрудник больше не сможет войти. Прогресс сохранится, доступ можно вернуть.", "Закрыть доступ"],
                 archived: ["Перенести в архив?", "Сотрудник пропадёт из списка учеников и не сможет войти. Всё, что он прошёл, сохранится — вернуть можно в любой момент.", "В архив"],
