@@ -817,7 +817,7 @@ function gdocKind(l) {
   if (l.kind !== "видео" && /drive\.google\.com\/(file\/d\/|open\?id=)/.test(u)) return "pdf";
   return "";
 }
-const DOCC = "mopo-docs-v7";                           /* v2: таблицы 1 в 1 и кликабельное оглавление — старые копии не берём */
+const DOCC = "mopo-docs-v8";                           /* v2: таблицы 1 в 1 и кликабельное оглавление — старые копии не берём */
 async function docCacheGet(id) { try { const r = await (await caches.open(DOCC)).match("/__doc/" + encodeURIComponent(id)); return r ? await r.json() : null; } catch (e) { return null; } }
 async function docCachePut(id, v) { try { await (await caches.open(DOCC)).put("/__doc/" + encodeURIComponent(id), new Response(JSON.stringify(v), { headers: { "Content-Type": "application/json" } })); } catch (e) { } }
 const docPage = (text) => `<body style="font:15px/1.5 Arial,sans-serif;color:#232227;padding:28px">${text}</body>`;
@@ -1108,6 +1108,7 @@ function sheetShell(names) {
   table{border-collapse:collapse;table-layout:fixed}
   td{border:1px solid #E1DFDB;padding:4px 6px;vertical-align:top;font-size:12px;line-height:1.35;overflow-wrap:anywhere}
   .cut{color:#6D6B72;font-size:12px;margin:10px 2px}
+  td a{color:#C84E17}
   .wait{padding:24px;color:#6D6B72}</style></head><body>
   <div id="bar">${tabs || "<b>Лист</b>"}<span class="z"><button type="button" id="zm">−</button><span id="zv">100%</span>
     <button type="button" id="zp">+</button><button type="button" id="zf">По ширине</button></span></div>
@@ -1140,6 +1141,14 @@ function sheetShell(names) {
       if(d.i===cur){ inner.innerHTML=cache[d.i]; wrap.scrollTop=0; wrap.scrollLeft=0; fit(); }
     });
     [].slice.call(document.querySelectorAll("#bar [data-i]")).forEach(function(b){ b.onclick=function(){ show(+b.dataset.i); }; });
+    /* ссылка в ячейке: документ Google открываем в кабинете, остальное — новой вкладкой */
+    document.addEventListener("click",function(e){
+      var a=e.target.closest&&e.target.closest("a[href]"); if(!a) return;
+      var h=a.getAttribute("href")||""; if(!/^https?:/i.test(h)) return;
+      e.preventDefault();
+      if(/(docs\.google\.com|drive\.google\.com)/.test(h)) parent.postMessage({mopo:"opendoc",url:h},"*");
+      else window.open(h,"_blank","noopener");
+    },true);
     window.addEventListener("resize",function(){ setTimeout(fit,100); });
     set(); show(0);
   })();<\/script></body></html>`;
