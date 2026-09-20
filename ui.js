@@ -26,3 +26,11 @@ function plural(n, one, few, many) {
   const m10 = n % 10, m100 = n % 100;
   return n + " " + (m10 === 1 && m100 !== 11 ? one : m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20) ? few : many);
 }
+
+/* дата события по часам пользователя: в метке хранится UTC, и вечером она показывала вчерашний день */
+const dayRu = at => {
+  if (!at) return "";
+  const d = new Date(at);
+  if (isNaN(d.getTime())) { const m = String(at).match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? m[3] + "." + m[2] + "." + m[1] : String(at); }
+  return d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" });
+};

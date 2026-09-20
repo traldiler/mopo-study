@@ -20,13 +20,13 @@ async function quizEditor({ quizId, sub, block, topic, lessons, onDone, mode, ba
     <div class="qe-top"><div><div class="flab">${exam ? "Вопросы в экзамене" : quizId ? "Мини-тест" : "Новый мини-тест"}</div><div class="qe-h">${esc(topic)}</div></div>
       <button class="x" type="button" data-a="0" title="Закрыть">×</button></div>
     ${exam ? `<div class="qe-meta">Здесь все вопросы экзамена по этим материалам — исходные и добавленные. Правьте, удаляйте, меняйте порядок и добавляйте, как в мини-тесте.
-        Исправление сразу увидят те, кто начнёт экзамен после сохранения; прежние попытки остаются как были.${Q.editedBy ? ` Последняя правка: ${esc(Q.editedBy)}${Q.editedAt ? ", " + esc(fmtDate(String(Q.editedAt).slice(0, 10))) : ""}.` : ""}</div>
+        Исправление сразу увидят те, кто начнёт экзамен после сохранения; прежние попытки остаются как были.${Q.editedBy ? ` Последняя правка: ${esc(Q.editedBy)}${Q.editedAt ? ", " + esc(dayRu(Q.editedAt)) : ""}.` : ""}</div>
       <label class="fck qe-inc"><input type="checkbox" id="qeinc" ${Q.include ? "checked" : ""}><u></u>Включить в экзамен</label>
       ${Q.demoNoKey ? `<div class="note warn">Демо: правильные ответы исходных вопросов знает только сервер, поэтому здесь они не отмечены. В рабочей версии отметки придут вместе с вопросами. Чтобы сохранить в демо — отметьте ответы сами.</div>` : ""}
       ${Q.locked.length ? `<details class="qe-locked"><summary>Ещё ${plural(Q.locked.length, "задание", "задания", "заданий")} только для просмотра — развёрнутый ответ или тренажёр</summary>
         ${Q.locked.map(x => `<div class="qe-lock"><span class="tag">${{ short: "развёрнутый ответ", sim_dsk: "тренажёр ДСК", sim_pick: "подбор оборудования", sim_chat: "переписка с клиентом" }[x.type] || x.type}${x.points > 1 ? " · " + x.points + " балла" : ""}</span>${esc(x.text)}</div>`).join("")}
         <p class="hint tiny">Такие задания проверяются по-особому (ИИ или схема), поэтому меняются в исходных файлах экзамена — напишите разработчику.</p></details>` : ""}`
-    : `<div class="qe-meta">${quizId ? `${Q.edited ? `Изменён${Q.editedBy ? " · " + esc(Q.editedBy) : ""}${Q.editedAt ? " · " + esc(fmtDate(String(Q.editedAt).slice(0, 10))) : ""}` : "Исходный вариант"}
+    : `<div class="qe-meta">${quizId ? `${Q.edited ? `Изменён${Q.editedBy ? " · " + esc(Q.editedBy) : ""}${Q.editedAt ? " · " + esc(dayRu(Q.editedAt)) : ""}` : "Исходный вариант"}
       · проходили: ${stats.tried} · сдали: ${stats.passed}${stats.retake ? ` · ждут пересдачи: ${stats.retake}` : ""}` : "Тест появится у сотрудников в конце темы сразу после сохранения."}</div>
     <div class="qe-head">
       <div><label class="f">Название</label><input type="text" id="qetitle" value="${esc(Q.title || "")}"></div>

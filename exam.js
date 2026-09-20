@@ -93,12 +93,21 @@ function exNav() {
     btn.onclick = () => { EX.cur = i; exBlock(); exNav(); window.scrollTo(0, 0); };
     n.appendChild(btn);
   });
+  exProg();
+}
+/* строка «Отвечено N из M» и полоса: обновляем и без перерисовки раздела,
+   иначе после набранного текста счётчик отстаёт на один ответ */
+function exProg() {
+  const all = exAll(), done = all.filter(exAnswered).length;
+  const line = document.querySelector("#exblk .prog"), bar = document.querySelector("#exblk .bar i");
+  if (line) line.textContent = "Отвечено " + done + " из " + all.length;
+  if (bar) bar.style.width = Math.round(done / all.length * 100) + "%";
 }
 let exT = Date.now();
 function exTouch(q, soft) {
   const now = Date.now();
   EX.times[q.id] = (EX.times[q.id] || 0) + Math.min(180, Math.round((now - exT) / 1000)); exT = now;
-  exSave(); if (!soft) exNav();
+  exSave(); if (soft) exProg(); else exNav();
 }
 function exBlock() {
   const b = EX.data.blocks[EX.cur], host = $("#exblk"); if (!host) return;
@@ -340,7 +349,11 @@ function exResult(r) {
     <table class="bt"><tr><th>Блок</th><th>Баллы</th><th>%</th></tr>
       ${(r.byBlock || []).slice().sort((x, y) => blockNum(x.n) - blockNum(y.n)).map(b => `<tr><td>${blockNum(b.n)}. ${esc(b.title)}</td><td>${b.got} / ${b.max}</td><td>${b.max ? Math.round(b.got / b.max * 100) : 0}%</td></tr>`).join("")}
     </table>
-    <p class="hint">Правильные ответы здесь не показываются — разбор ошибок придёт отдельным файлом от руководителя.</p></div>`;
+    <p class="hint">Правильные ответы здесь не показываются — разбор ошибок придёт отдельным файлом от руководителя.</p>
+    ${r.needsReview ? `<div class="note">Часть развёрнутых ответов (${plural(r.needsReview, "задание", "задания", "заданий")}) проверит руководитель вручную — итог может немного измениться.</div>` : ""}
+    <div class="foot"><button class="btn" id="exhome" type="button">Вернуться в кабинет</button></div></div>`;
+  const home = $("#exhome");
+  if (home) home.onclick = () => go("cabinet");           /* без этой кнопки с экрана результата было не уйти */
 }
 
 /* ---------- демо-подсчёт (без сервера): ответы разбираем по ключу мини-тестов и заглушкам ---------- */

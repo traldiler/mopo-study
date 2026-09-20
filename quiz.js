@@ -197,7 +197,7 @@ async function showQuizReview(quizId, title) {
   back.innerHTML = `<div class="modal wide" role="dialog" aria-modal="true">
     <b>Разбор: ${esc(title)}</b>
     ${r.changed ? '<div class="note warn">После этой попытки тест изменили — ниже вопросы в том виде, в каком вы их проходили.</div>' : ""}
-    <p class="hint">Последняя попытка от ${esc(String(r.at || "").slice(0, 10))}: ${r.score} из ${r.total},
+    <p class="hint">Последняя попытка от ${esc(dayRu(r.at))}: ${r.score} из ${r.total},
       ${r.passed ? "тест сдан" : "тест не сдан"}. Всего попыток: ${r.attempts}.</p>
     ${r.details.map(d => `<div class="q ${d.correct ? "" : "bad"}">
         <div class="qn"><b>${d.correct ? "верно" : "неверно"}</b></div>

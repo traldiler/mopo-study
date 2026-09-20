@@ -283,12 +283,13 @@ function printReport(a, mode) {
     <div class="rpaper"><style>${css}</style>${head}${body}</div>`;
   v.querySelector('[data-a="close"]').onclick = () => v.remove();
   v.querySelector('[data-a="print"]').onclick = () => {
-    const paper = v.querySelector(".rpaper");
-    const prev = document.body.innerHTML;
-    document.body.innerHTML = `<div class="printroot">${paper.innerHTML}</div>`;
+    /* раньше страницу пересобирали и перезагружали — при отмене печати кабинет терял место.
+       Теперь печатается только отчёт, а страница остаётся как была. */
+    const снять = () => document.body.classList.remove("printing");
+    document.body.classList.add("printing");
+    window.addEventListener("afterprint", снять, { once: true });
+    setTimeout(снять, 60000);                  /* если браузер не сообщит об окончании печати */
     window.print();
-    document.body.innerHTML = prev;
-    location.reload();                         /* после печати возвращаем страницу в рабочее состояние */
   };
   document.body.appendChild(v);
 }
@@ -343,7 +344,7 @@ async function admUsers() {
     (shown.length ? shown.map((u, i) => `<tr class="${u.archived ? "arch" : ""}"><td><span class="ucell">${avatarHtml(u, 26)}${esc(u.fio)}</span></td><td>${esc(u.login)}</td>
       <td>${roleName(u)}</td><td>${u.email ? `<a href="mailto:${esc(u.email)}">${esc(u.email)}</a>` : '<span class="hint">—</span>'}</td>
       <td>${u.birthday ? fmtDate(u.birthday) : '<span class="hint">—</span>'}</td>
-      <td>${STATUS_TAG[userStatus(u)]}${u.archived && u.archivedAt ? `<div class="hint tiny">с ${fmtDate(String(u.archivedAt).slice(0, 10))}</div>` : ""}</td>
+      <td>${STATUS_TAG[userStatus(u)]}${u.archived && u.archivedAt ? `<div class="hint tiny">с ${dayRu(u.archivedAt)}</div>` : ""}</td>
       <td><button class="btn small white" data-i="${i}" type="button">Управлять</button></td></tr>`).join("")
     : `<tr><td colspan="7" class="hint">${ADM.users === "arch" ? "В архиве пока никого." : "Сотрудников пока нет."}</td></tr>`);
   host.querySelector("#utbl").appendChild(t);
@@ -463,7 +464,8 @@ async function delMaterial(kind, row, d) {
     text: `<p>${mayDel ? "Удалить" : "Спрятать"} ${what}?${inside ? ` Внутри: ${inside}.` : ""}</p>
       ${shown ? `<p class="hint"><b class="inl">Спрятать</b> — сотрудники перестанут видеть${kind === "block" ? " блок" : kind === "sub" ? " тему" : " материал"}, прогресс и заметки сохранятся, вернуть можно одной кнопкой.</p>` : ""}
       ${mayDel ? `<p class="hint"><b class="inl">Удалить</b> — пропадёт навсегда${inside ? " вместе со всем, что внутри" : ""}. Отменить нельзя.</p>`
-        : `<p class="hint">Удалить ${kind === "block" ? "блок" : "тему"} может только разработчик: внутри есть материалы, добавленные не вами.</p>`}`,
+        : `<p class="hint">${kind === "lesson" ? "Удалить материал может только разработчик: его добавили не вы."
+            : `Удалить ${kind === "block" ? "блок" : "тему"} может только разработчик: внутри есть материалы, добавленные не вами.`}</p>`}`,
     buttons: [{ label: "Отмена", cls: "ghost", value: null }]
       .concat(shown ? [{ label: "Спрятать", cls: "green", value: "hide" }] : [])
       .concat(mayDel ? [{ label: "Удалить навсегда", cls: "red", value: "del" }] : []) });
@@ -580,7 +582,7 @@ async function admMaterials(local) {                 /* local — своя ко�
           ${truthy(l.active) ? "" : '<span class="mst off" title="Сотрудники этот материал не видят">скрыт</span>'}
           <button class="btn small white" type="button">Изменить</button>
           ${truthy(l.active) ? "" : '<button class="mshow on" data-show="1" type="button">Показать</button>'}
-          ${truthy(l.active) || canDelMat(l) ? '<button class="mdel" type="button" title="Удалить или спрятать">Удалить</button>' : ""}`;
+          ${truthy(l.active) || canDelMat(l) ? `<button class="mdel" type="button" title="${canDelMat(l) ? "Удалить или спрятать" : "Спрятать от сотрудников"}">${canDelMat(l) ? "Удалить" : "Спрятать"}</button>` : ""}`;
         r.querySelector(".btn").onclick = () => lessonForm(l, d);
         if (r.querySelector("[data-show]")) r.querySelector("[data-show]").onclick = async () => reload(await setVisible("lesson", l, true, d));
         if (r.querySelector(".mdel")) r.querySelector(".mdel").onclick = async () => reload(await delMaterial("lesson", l, d));
@@ -830,7 +832,7 @@ async function admQuestions(box) {
     f.forEach(q => {
       const c = el("div", "card note-card qitem " + (q.answer ? "answered" : "waiting"));
       c.innerHTML = `<div class="nc-head"><span class="tag ${q.answer ? "ok" : "wait"}">${q.answer ? "отвечен" : "ждёт ответа"}</span>
-          <b>${esc(q.fio)}</b><span class="hint">${esc(q.lessonTitle || "общий вопрос")} · ${esc(String(q.at).slice(0, 10))}</span></div>
+          <b>${esc(q.fio)}</b><span class="hint">${esc(q.lessonTitle || "общий вопрос")} · ${esc(dayRu(q.at))}</span></div>
         <p class="qq">${esc(q.text)}</p>
         ${q.answer ? `<div class="ans"><b>Ответ ${esc(q.answeredBy || "")}:</b><p>${esc(q.answer)}</p></div>` : ""}`;
       if (!q.answer) {
@@ -935,8 +937,11 @@ async function admSettings() {
       const st = await api(heavy ? "admin.prepStat" : "admin.prepAutoStat");
       const l = heavy ? st : st.light;
       if (!l) { $("#prepstat").textContent = "Сколько листов готово — нажмите «Проверить, что устарело»."; return; }
+      const ждут = Number(l.picSheets) || 0;                       /* листы, где копия есть, но не хватает снимков */
+      const старые = Math.max(0, (Number(l.left) || 0) - ждут);
       $("#prepstat").innerHTML = (l.left
-        ? `<b class="inl">Копии устарели у ${l.left} из ${l.total} листов.</b>${l.ready != null ? " Готовых: " + l.ready + "." : ""}`
+        ? `<b class="inl">Не готовы ${l.left} из ${l.total} листов.</b>` +
+          (старые ? ` Копии устарели: ${старые}.` : "") + (l.ready != null ? " Готовых: " + l.ready + "." : "")
         : `Все ${l.total} листов готовы — сотрудники открывают таблицы сразу.`) +
         (l.picsLeft ? `<br>Ждут фото: ${l.picsLeft} ${plural(l.picsLeft, "снимок", "снимка", "снимков")} на ${l.picSheets} ${plural(l.picSheets, "листе", "листах", "листах")}.` : "") +
         (l.store === false ? ` <span class="hint tiny">Копии хранятся временно (около 6 часов): у сервиса нет разрешения сохранять файлы на Диск.</span>` : "");
@@ -958,6 +963,7 @@ async function admSettings() {
     const t0 = Date.now();
     const mmss = ms => (ms >= 60000 ? Math.floor(ms / 60000) + " мин " : "") + Math.round(ms % 60000 / 1000) + " сек";
     let ready = 0, skip = 0, bad = [], total = 0, from = 0, last = "", pics = 0, picLast = "", picLeft = 0, plan = 0, more = true, note = "запрашиваем список листов…";
+    let подряд = 0, молчит = false;                      /* сколько листов подряд сервер не ответил */
     const paint = () => {
       const gone = Date.now() - t0;
       const per = ready ? gone / ready : 0;
@@ -982,12 +988,15 @@ async function admSettings() {
         if (!r) {                                         /* лист не дался три раза — пропускаем его и идём дальше */
           bad.push("лист №" + (from + 1) + " в списке — " + ((err && err.message) || "сервер не ответил") +
             ". Какой именно — покажет кнопка «Проверить, что устарело»");
+          подряд++;
+          if (подряд >= 3) { молчит = true; paint(); break; }   /* три листа подряд молчат — дело не в листах, а в связи */
           from = from + 1; more = total ? from < total : true;
           note = "пропустили лист, который не отвечает";
           paint();
           if (!more) break;
           continue;
         }
+        подряд = 0;
         more = !!r.more;
         total = r.total || total;
         (r.items || []).forEach(x => {
@@ -1002,7 +1011,8 @@ async function admSettings() {
         if ((ready + skip) % 10 === 0) prepStat();           /* обновляем строку «копии устарели у…» по ходу */
         from = r.next || 0;
       } while (more && !PREP.stop);        /* лист с фото возвращает тот же номер — идём по нему дальше */
-      note = PREP.stop ? "Остановлено. Нажмите кнопку ещё раз — продолжим с этого места." : "Готово.";
+      note = молчит ? "Сервер не отвечает — остановились. Проверьте связь и нажмите кнопку ещё раз: продолжим с этого места."
+           : PREP.stop ? "Остановлено. Нажмите кнопку ещё раз — продолжим с этого места." : "Готово.";
       paint(); prepStat();
       if (bad.length) box.insertAdjacentHTML("beforeend",
         `<div class="note warn">Не удалось напечатать ${bad.length}:<ul>${bad.slice(0, 12).map(x => `<li>${esc(x)}</li>`).join("")}</ul></div>`);
@@ -1016,6 +1026,8 @@ async function admSettings() {
 }
 
 /* список всех файлов программы и ссылок: галочки + «Открыть» / «Закрыть» доступ конкретному сотруднику */
+const ACC = { from: 0 };                                  /* проверка доступа сотрудника — место обрыва */
+
 async function accFiles() {
   const box = $("#accres"), btn = $("#accload");
   btn.disabled = true; btn.textContent = "Загружаем…";
@@ -1068,50 +1080,77 @@ async function accFiles() {
     if (!mail) return toast("Впишите почту сотрудника");
     const b = $("#acccheck"), info = $("#accinfo");
     b.disabled = true;
-    box.querySelectorAll(".accmark").forEach(m => { m.textContent = ""; m.className = "accmark"; });
-    let from = 0, seen = 0;
-    try {
-      do {
-        const part = await api("admin.fileWho", { data: { email: mail, from: from, count: 15 } });
-        (part.has || []).forEach(id => {
-          const m = box.querySelector(`.accmark[data-id="${id}"]`);
-          if (m) { m.textContent = "открыт"; m.className = "accmark on"; }
-        });
-        seen += 15; info.textContent = "Проверяем… " + Math.min(seen, part.total) + " из " + part.total;
-        from = part.next || 0;
-      } while (from);
-      const n = box.querySelectorAll(".accmark.on").length;
-      info.textContent = "Уже открыто файлов: " + n;
-    } catch (e) { fail(e); }
+    let from = ACC.from;                                 /* если прошлый раз оборвался — идём дальше с того же места */
+    if (!from) box.querySelectorAll(".accmark").forEach(m => { m.textContent = ""; m.className = "accmark"; });
+    while (true) {
+      let part = null, беда = null;
+      for (let try_ = 1; try_ <= 3 && !part; try_++) {    /* порция могла не успеть — повторяем, не теряя пройденное */
+        try { part = await api("admin.fileWho", { data: { email: mail, from: from, count: try_ === 1 ? 10 : 4 } }); }
+        catch (e) { беда = e; info.textContent = "Повторяем… " + from; await new Promise(r => setTimeout(r, 1200 * try_)); }
+      }
+      if (!part) {
+        ACC.from = from; b.disabled = false; b.textContent = "Продолжить проверку";
+        info.textContent = "Прервалось на " + from + " — нажмите «Продолжить проверку»";
+        return fail(беда);
+      }
+      (part.has || []).forEach(id => {
+        const m = box.querySelector(`.accmark[data-id="${id}"]`);
+        if (m) { m.textContent = "открыт"; m.className = "accmark on"; }
+      });
+      info.textContent = "Проверяем… " + (part.done || from) + " из " + part.total;
+      from = part.next || 0;
+      if (!from) break;
+    }
+    ACC.from = 0; b.textContent = "Показать, что уже открыто";
+    info.textContent = "Уже открыто файлов: " + box.querySelectorAll(".accmark.on").length;
     b.disabled = false;
   };
 }
+
+const DRV = { files: [], from: 0, account: "", total: 0, driveApi: false };   /* чтобы продолжать проверку с места обрыва */
 
 /* доступ сервиса к файлам программы: чего не хватает и кнопки для видео */
 async function drvStatus() {
   const box = $("#drvres"), btn = $("#drvcheck");
   btn.disabled = true; btn.textContent = "Проверяем…";
-  /* файлов больше сотни — спрашиваем порциями, чтобы сервер успевал ответить */
-  let r = null;
-  try {
-    let from = 0;
-    do {
-      const part = await api("admin.driveStatus", { from: from, count: 20 });
-      if (!part || !Array.isArray(part.files)) { r = part; break; }
-      r = r ? { account: part.account, total: part.total, driveApi: part.driveApi, files: r.files.concat(part.files) }
-            : { account: part.account, total: part.total, driveApi: part.driveApi, files: part.files };
-      btn.textContent = "Проверяем… " + r.files.length + " из " + (part.total || "?");
-      box.innerHTML = `<p class="hint">Проверено ${r.files.length} из ${part.total || "?"} — файлов много, это занимает до минуты.</p>`;
-      from = part.next || 0;
-    } while (from);
-  } catch (e) { btn.disabled = false; btn.textContent = "Проверить доступ к файлам"; box.innerHTML = ""; return fail(e); }
+  /* файлов больше сотни — спрашиваем порциями, чтобы сервер успевал ответить.
+     Если порция сорвалась, повторяем её и продолжаем с места обрыва, а не с нуля. */
+  let r = DRV.files.length ? { account: DRV.account, total: DRV.total, driveApi: DRV.driveApi, files: DRV.files.slice() } : null;
+  let from = DRV.from, стоп = false;
+  while (!стоп) {
+    let part = null, беда = null;
+    for (let try_ = 1; try_ <= 3 && !part; try_++) {          /* три попытки: связь и Google иногда отвечают не сразу */
+      try { part = await api("admin.driveStatus", { from: from, count: try_ === 1 ? 12 : 5 }); }
+      catch (e) {
+        беда = e;
+        btn.textContent = "Повторяем… " + from + " из " + (r && r.total ? r.total : "?");
+        await new Promise(res => setTimeout(res, 1200 * try_));
+      }
+    }
+    if (!part) {                                              /* совсем не отвечает — сохраняем, что проверили */
+      DRV.account = r && r.account; DRV.total = r && r.total; DRV.driveApi = r && r.driveApi;
+      DRV.files = r ? r.files : []; DRV.from = from;
+      btn.disabled = false; btn.textContent = "Продолжить проверку";
+      box.innerHTML = `<div class="note warn">Проверено ${plural(from, "файл", "файла", "файлов")}${r && r.total ? " из " + r.total : ""}, дальше сервер не ответил.
+        Нажмите «Продолжить проверку» — сервис пойдёт дальше с этого места.</div>`;
+      return fail(беда);
+    }
+    if (!Array.isArray(part.files)) { r = part; break; }
+    r = r ? { account: part.account, total: part.total, driveApi: part.driveApi, files: r.files.concat(part.files) }
+          : { account: part.account, total: part.total, driveApi: part.driveApi, files: part.files };
+    btn.textContent = "Проверяем… " + r.files.length + " из " + (part.total || "?");
+    box.innerHTML = `<p class="hint">Проверено ${r.files.length} из ${part.total || "?"} — файлов много, это занимает до минуты.</p>`;
+    from = part.next || 0;
+    if (!from) стоп = true;
+  }
+  DRV.files = []; DRV.from = 0;                               /* дошли до конца — продолжать нечего */
   btn.disabled = false; btn.textContent = "Проверить ещё раз";
   if (!r || !Array.isArray(r.files)) {                      /* неожиданный ответ — показываем как есть, чтобы понять причину */
     box.innerHTML = `<div class="note warn">Сервер ответил не так, как ожидалось. Пришлите разработчику текст ниже:<pre class="drvraw">${esc(JSON.stringify(r).slice(0, 600))}</pre></div>`;
     return;
   }
   const docs = r.files.filter(f => !f.video), vids = r.files.filter(f => f.video);
-  const noDoc = docs.filter(f => !f.ok), noVid = vids.filter(f => !f.ok || !f.canEdit);
+  const noDoc = docs.filter(f => !f.ok), noVid = vids.filter(f => !f.ok);
   const open = vids.filter(f => f.ok && f.access === "ANYONE_WITH_LINK").length;
   const dev = APP.user.role === "dev";
   box.innerHTML = `<div class="drv">
@@ -1122,8 +1161,10 @@ async function drvStatus() {
       (проще всего — всю папку с материалами разом). Ссылка открывает сам файл — в нём «Поделиться» → добавьте почту выше:
       <ul>${noDoc.map(f => `<li>${esc(f.title)}${f.link ? " <i>(ссылка внутри другого документа)</i>" : ""} — <a href="https://drive.google.com/open?id=${esc(f.id)}" target="_blank" rel="noopener">открыть файл</a></li>`).join("")}</ul></div>` : ""}
     <p><b class="inl">Видео:</b> ${vids.length} в программе, открыто по ссылке — ${open}.</p>
-    ${noVid.length ? `<div class="note warn">Кнопка не сможет управлять ${plural(noVid.length, "видео", "видео", "видео")}: у ${esc(r.account)} нет права «Редактор».
-      Дайте его на папку с видео:<ul>${noVid.map(f => `<li>${esc(f.title)}</li>`).join("")}</ul></div>` : ""}
+    ${noVid.length ? `<div class="note warn">Нет доступа к ${plural(noVid.length, "видео", "видео", "видео")} — откройте ${esc(r.account)} хотя бы «Читатель»:
+      <ul>${noVid.map(f => `<li>${esc(f.title)}</li>`).join("")}</ul></div>` : ""}
+    <p class="hint tiny">Чтобы сотрудник смотрел видео, права «Редактор» не нужны — достаточно, чтобы видео было открыто по ссылке.
+      «Редактор» нужен только кнопке ниже: она сама меняет доступ у файлов. Если его не хватит, кнопка перечислит, где именно.</p>
     ${dev ? `<div class="foot"><button class="btn green" id="vopen" type="button">Открыть видео по ссылке</button>
       <button class="btn white" id="vclose" type="button">Закрыть видео</button></div>
       <p class="hint tiny">«Открыть» — все видео программы смотрятся по ссылке, только просмотр. Ссылки видят лишь те, кто вошёл в кабинет.

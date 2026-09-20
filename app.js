@@ -278,14 +278,14 @@ function screenLogin() {
       <span class="hint" id="err"></span></div></div>`;
   const go = async () => {
     const login = $("#lg").value.trim(), password = $("#pw").value;
-    if (!login || !password) { $("#err").textContent = "Заполните оба поля."; return; }
+    if (!login || !password) { $("#err").textContent = "Заполните оба поля."; $("#err").className = "hint bad"; return; }
     $("#go").disabled = true;
     try {
       const r = await api("login", { login: login, password: password });
       if (r.error) throw new Error(r.error);
       APP.token = r.token; APP.user = r.user; localStorage.setItem("mopo-token", r.token);
       start();
-    } catch (e) { $("#err").textContent = e.message; $("#go").disabled = false; }
+    } catch (e) { $("#err").textContent = e.message; $("#err").className = "hint bad"; $("#go").disabled = false; }   /* серую подсказку не замечали */
   };
   $("#pweye").onclick = () => {
     const i = $("#pw"), show = i.type === "password";
@@ -1528,7 +1528,7 @@ function openLesson(l, at, quote) {
     const cnt = v.querySelectorAll("[data-tab] i");
     if (cnt.length) { cnt[0].textContent = notes.length || ""; cnt[1].textContent = hlAll.length || ""; }
     v.querySelector(".nlist").innerHTML = notes.length ? notes.map(n => `<div class="note-item">
-        <div class="ni-head"><b>${esc((n.at || "").slice(0, 10))}</b>${n.time ? `<span class="tc">▶ ${esc(n.time)}</span>` : ""}</div>
+        <div class="ni-head"><b>${esc(dayRu(n.at))}</b>${n.time ? `<span class="tc">▶ ${esc(n.time)}</span>` : ""}</div>
         ${n.quote ? `<div class="nquote">«${esc(n.quote)}»</div>` : ""}
         <p>${esc(n.text)}</p>
         <div class="ni-foot">${n.quote ? `<button class="btn small white" data-go="${esc(n.id)}" type="button">Перейти к месту</button>` : "<span></span>"}
@@ -1603,7 +1603,7 @@ function notesFor(l) {
       <div class="mbtns"><button class="btn ghost" data-a="0" type="button">Закрыть</button>
         <button class="btn" data-a="1" type="button">Сохранить</button></div>
       <div class="notes">${list.length ? list.map(n => `<div class="note-item">
-          <div class="ni-head"><b>${esc((n.at || "").slice(0, 10))}</b>${n.time ? `<span class="tc">▶ ${esc(n.time)}</span>` : ""}</div>
+          <div class="ni-head"><b>${esc(dayRu(n.at))}</b>${n.time ? `<span class="tc">▶ ${esc(n.time)}</span>` : ""}</div>
           ${n.quote ? `<div class="nquote">«${esc(n.quote)}»</div>` : ""}<p>${esc(n.text)}</p>
           <div class="ni-foot"><button class="btn small white" data-go="${esc(n.id)}" type="button">Открыть материал</button>
             <button class="btn small red" data-del="${esc(n.id)}" type="button">Удалить</button></div></div>`).join("")
@@ -1745,9 +1745,9 @@ async function screenQuestions() {
       c.innerHTML = `<div class="nc-head">
           <span class="tag ${q.answer ? "ok" : "wait"}">${q.answer ? "есть ответ" : "ждёт ответа"}</span>
           <b>${esc(q.lessonTitle || "Общий вопрос")}</b>
-          <span class="hint">${esc((q.at || "").slice(0, 10))}</span></div>
+          <span class="hint">${esc(dayRu(q.at))}</span></div>
         <p class="qq">${esc(q.text)}</p>
-        ${q.answer ? `<div class="ans"><b>Ответ ${esc(q.answeredBy || "РОПа")}${q.answeredAt ? " · " + esc(String(q.answeredAt).slice(0, 10)) : ""}:</b>
+        ${q.answer ? `<div class="ans"><b>Ответ ${esc(q.answeredBy || "РОПа")}${q.answeredAt ? " · " + esc(dayRu(q.answeredAt)) : ""}:</b>
             <p>${esc(q.answer)}</p></div>` : `<p class="hint">${staff ? "Разработчик" : "РОП"} ответит здесь. Если срочно — напишите ему в чат.</p>`}`;
       const foot = el("div", "ni-foot");
       const left = el("div", "ni-left");
@@ -1845,9 +1845,18 @@ async function screenNotes(keep) {
     const best = Math.max(0, ...pool.map(x => x.score));
     const f = pool.filter(x => x.score && x.score === best);
     if (!f.length) {
-      host.appendChild(el("div", "card", NUI.mode === "bm" && !cnt("bm")
-        ? '<p class="hint">Закладок пока нет. Звёздочка «В закладки» есть у каждого материала и в окне просмотра.</p>'
-        : '<p class="hint">Ничего не найдено. Попробуйте другое слово или снимите фильтры.</p>'));
+      /* пусто по трём разным причинам — и раньше во всех трёх винили фильтры */
+      const фильтры = !!NUI.q || NUI.blocks.size || NUI.kinds.size || (NUI.mode === "hl" && NUI.colors.size);
+      const пустоВообще = !cnt(NUI.mode);
+      const где = { note: "Заметок", hl: "Выделений", bm: "Закладок" }[NUI.mode] || "Записей";
+      const как = { note: "Кнопка «Заметка» есть у каждого материала и в окне просмотра.",
+                    hl: "Выделите фразу в конспекте, документе или таблице — и выберите цветной маркер.",
+                    bm: "Звёздочка «В закладки» есть у каждого материала и в окне просмотра." }[NUI.mode] || "";
+      const рядом = ["note", "hl", "bm"].filter(m => m !== NUI.mode && cnt(m))
+        .map(m => ({ note: "заметки", hl: "выделения", bm: "закладки" })[m] + " (" + cnt(m) + ")");
+      host.appendChild(el("div", "card", фильтры
+        ? '<p class="hint">Ничего не найдено. Попробуйте другое слово или снимите фильтры.</p>'
+        : `<p class="hint">${где} пока нет. ${как}${пустоВообще && рядом.length ? " У вас есть " + рядом.join(" и ") + " — они на соседних вкладках." : ""}</p>`));
       return;
     }
     f.forEach(x => {
@@ -1856,7 +1865,7 @@ async function screenNotes(keep) {
       if (k === "hl") c.style.setProperty("--mk", (MARKERS[x.n.color] || MARKERS[1]).c);
       c.innerHTML = `<div class="nc-head"><span class="tag">Блок ${blockNum(x.ref.block.n)}</span>
           <span class="tag">${esc(x.ref.lesson.kind)}</span><b>${k === "bm" ? "★ " : ""}${esc(x.ref.lesson.title)}</b>
-          <span class="hint">${esc((x.n.at || "").slice(0, 10))}</span>
+          <span class="hint">${esc(dayRu(x.n.at))}</span>
           ${x.n.time ? `<span class="tc">▶ ${esc(x.n.time)}</span>` : ""}
           <button class="link inblock" type="button" data-in="1">показать в блоке</button></div>
         ${k === "hl" ? `<p class="hlq">${esc(x.n.quote)}</p><div class="mkrow">${dots(x.n.color || 1, "data-c")}</div>`
@@ -2753,6 +2762,8 @@ async function demoCall(action, d) {
     case "admin.lessonSave": {
       const m = await demoMat(), x = Object.assign({}, d.data);
       if (x.id && !m.lessons.some(l => l.id === x.id)) return { error: "Материал не найден" };
+      if (!Number(x.block)) return { error: "Выберите блок" };                 /* как на сервере: без блока материал теряется */
+      if (!String(x.title || "").trim()) return { error: "Напишите название" };
       if (!x.id) { x.id = "l-" + Date.now(); x.createdBy = demoMe().id; }
       await demoOp("lesson", x);
       return { ok: true, id: x.id };
