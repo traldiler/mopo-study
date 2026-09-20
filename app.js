@@ -950,7 +950,8 @@ function pdfScroll(toc, tabs, note) {
   #bar button{background:rgba(255,255,255,.14);border:0;color:#fff;border-radius:999px;padding:6px 14px;font:600 13px Arial;cursor:pointer}
   #zv{min-width:46px;text-align:center} #num{opacity:.75;margin-left:10px}
   #msg{padding:40px;text-align:center;color:#232227;font-size:15px}
-  #htmlbox{display:none;padding:14px;background:#fff;transform-origin:0 0}
+  #htmlbox{display:none;padding:14px;background:#fff;transform-origin:0 0;min-height:100%;box-sizing:border-box}
+  body.sheet #sc{background:#fff}
   #htmlbox table{border-collapse:collapse;table-layout:fixed}
   #htmlbox td{border:1px solid #E1DFDB;padding:4px 6px;vertical-align:top;font:12px/1.35 Arial;overflow-wrap:anywhere}
   #htmlbox img{max-width:100%;height:auto;display:block;margin:0 auto 3px}
@@ -971,13 +972,23 @@ function pdfScroll(toc, tabs, note) {
     function fixTop(){ document.documentElement.style.setProperty("--top",(topEl?topEl.offsetHeight:0)+"px"); }
     fixTop(); window.addEventListener("resize",fixTop);
     var htmlbox=document.getElementById("htmlbox");
-    function showPdf(){ htmlbox.style.display="none"; wrap.style.display=""; }
+    function showPdf(){ htmlbox.style.display="none"; wrap.style.display=""; document.body.classList.remove("sheet"); }
     function showHtml(html){                              /* лист, который Google не печатает, кабинет собирает сам */
       wrap.style.display="none"; htmlbox.style.display="block"; htmlbox.innerHTML=html;
-      busyTab=false; pages=[]; document.getElementById("num").textContent="";
+      document.body.classList.add("sheet");
+      busyTab=false; pages=[];
+      document.getElementById("num").textContent="";      /* страниц у собранного листа нет */
+      sc.scrollTop=0; sc.scrollLeft=0;
+      var t=htmlbox.querySelector("table");
+      if(t){ z=Math.min(1,Math.max(.35,(sc.clientWidth-40)/t.scrollWidth)); }   /* сразу по ширине окна */
       zoomHtml();
     }
-    function zoomHtml(){ htmlbox.style.transform="scale("+z+")"; htmlbox.style.width=(100/z)+"%"; document.getElementById("zv").textContent=Math.round(z*100)+"%"; }
+    function zoomHtml(){
+      htmlbox.style.transform="scale("+z+")";
+      htmlbox.style.width=(100/z)+"%";
+      htmlbox.style.height=(100/z)+"%";
+      document.getElementById("zv").textContent=Math.round(z*100)+"%";
+    }
     function wait(text){ showPdf(); wrap.innerHTML='<div id="msg">'+text+'</div>'; }
     /* один документ или один лист таблицы: страницы строим заново */
     async function boot(u){
@@ -1031,7 +1042,14 @@ function pdfScroll(toc, tabs, note) {
     sc.addEventListener("scroll",num);
     document.getElementById("zm").onclick=function(){ z=Math.max(.5,Math.round((z-.1)*10)/10); layout(); };
     document.getElementById("zp").onclick=function(){ z=Math.min(3,Math.round((z+.1)*10)/10); layout(); };
-    document.getElementById("zf").onclick=function(){ z=1; fit=fitScale(); layout(); };
+    document.getElementById("zf").onclick=function(){
+      if(htmlbox && htmlbox.style.display==="block"){     /* «по ширине» для собранного листа */
+        var t=htmlbox.querySelector("table");
+        if(t) z=Math.min(1,Math.max(.35,(sc.clientWidth-40)/t.scrollWidth));
+        zoomHtml(); return;
+      }
+      z=1; fit=fitScale(); layout();
+    };
     /* масштаб щипком: тачпад (ctrl+колесо и жесты Safari) и два пальца на телефоне */
     function setZ(nz){ z=Math.min(3,Math.max(.4,Math.round(nz*100)/100)); layout(); }
     sc.addEventListener("wheel",function(e){ if(!e.ctrlKey&&!e.metaKey) return; e.preventDefault(); setZ(z*(e.deltaY>0?.93:1.07)); },{passive:false});
