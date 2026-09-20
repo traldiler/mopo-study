@@ -974,26 +974,34 @@ async function admSettings() {
           try { r = await api("admin.prepare", { from: from, count: 1, force: force }); }
           catch (e) { err = e; note = "сервер не ответил, пробуем ещё раз (" + tries + " из 3)"; paint(); await new Promise(res => setTimeout(res, 1500 * tries)); }
         }
-        if (!r) throw err || new Error("Сервер не ответил");
+        if (!r) {                                         /* лист не дался три раза — пропускаем его и идём дальше */
+          bad.push("лист №" + (from + 1) + " — " + ((err && err.message) || "сервер не ответил"));
+          from = from + 1; more = total ? from < total : true;
+          note = "пропустили лист, который не отвечает";
+          paint();
+          if (!more) break;
+          continue;
+        }
         more = !!r.more;
         total = r.total || total;
         (r.items || []).forEach(x => {
           if (x.state === "ready" || x.state === "cached") { ready++; last = x.title; }
-          else if (x.state === "pics") { pics += 10; picLast = x.title; note = "подставляем фото в лист «" + x.title + "»"; }
+          else if (x.state === "pics") { pics += 8; picLast = x.title; note = "подставляем фото в лист «" + x.title + "»"; }
           else if (x.state === "skip") skip++;
           else bad.push(x.title + (x.why ? " — " + x.why : ""));
         });
         note = "";
         paint();
+        if ((ready + pics / 10) % 10 === 0) prepStat();      /* обновляем строку «копии устарели у…» по ходу */
         from = r.next || 0;
       } while (more && !PREP.stop);        /* лист с фото возвращает тот же номер — идём по нему дальше */
       note = PREP.stop ? "Остановлено. Нажмите кнопку ещё раз — продолжим с этого места." : "Готово.";
-      paint();
+      paint(); prepStat();
       if (bad.length) box.insertAdjacentHTML("beforeend",
         `<div class="note warn">Не удалось напечатать ${bad.length}:<ul>${bad.slice(0, 12).map(x => `<li>${esc(x)}</li>`).join("")}</ul></div>`);
     } catch (e) {
       note = "Остановились: " + (e.message || e) + ". Нажмите кнопку ещё раз — продолжим с этого места.";
-      paint();
+      paint(); prepStat();
     }
     clearInterval(tick);
     PREP.run = false; b.disabled = false; b.textContent = "Подготовить копии";
