@@ -52,7 +52,7 @@ async function api(action, data) {
 }
 async function apiRaw(action, data) {
   /* сервер Google иногда отвечает сбоем вместо данных — чтение повторяем сами, запись не дублируем */
-  const safe = /^(boot|program|progress\.get|me|my\.questions|mat\.key|quiz\.overrides|exam\.extra|quiz\.review|admin\.(users|students|attempts|attempt|questions|badges|materials|resets|examList|examGet|quizGet))$/.test(action);
+  const safe = /^(boot|program|progress\.get|me|my\.questions|mat\.key|quiz\.overrides|exam\.extra|quiz\.review|doc\.get|admin\.(users|students|attempts|attempt|questions|badges|materials|resets|examList|examGet|quizGet))$/.test(action);
   let j = null;
   for (let tryN = 0; tryN < (safe ? 3 : 1); tryN++) {
     try {
@@ -61,11 +61,16 @@ async function apiRaw(action, data) {
         body: JSON.stringify(Object.assign({ action: action, token: APP.token }, data || {}))
       });
       const txt = await r.text();
-      j = JSON.parse(txt);
+      try { j = JSON.parse(txt); }
+      catch (pe) {                                   /* Google прислал страницу ошибки — покажем её заголовок, чтобы понять причину */
+        const t = (txt.match(/<title>([^<]*)/i) || [])[1] || txt.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").slice(0, 120);
+        throw new Error("bad:" + r.status + " " + t);
+      }
       break;
     } catch (e) {
       j = null;
-      if (tryN === (safe ? 2 : 0)) throw new Error("Сервер не ответил — проверьте интернет и попробуйте ещё раз");
+      const bad = /^bad:/.test(e.message || "");
+      if (tryN === (safe ? 2 : 0)) throw new Error(bad ? "Сбой сервера Google (" + e.message.slice(4).trim() + "). Попробуйте ещё раз" : "Сервер не ответил — проверьте интернет и попробуйте ещё раз");
       await new Promise(res => setTimeout(res, 800 * (tryN + 1)));
     }
   }
@@ -104,6 +109,8 @@ function snapDrop() {
 }
 /* ответ сервера при входе: всё, что нужно кабинету, одним куском */
 function applyBoot(b) {
+  /* неполный ответ (сбой Google) не должен затирать рабочую копию — иначе кабинет ломается */
+  if (!b || !b.program || !b.progress) throw new Error("Сервер ответил не полностью — попробуйте ещё раз");
   if (b.user) APP.user = Object.assign(APP.user || {}, b.user);
   PR.program = b.program; PR.progress = b.progress; PR.qOver = b.quizzes || null; PR.examX = b.examX || null;
   if (b.mat) MAT_HEX = b.mat;
