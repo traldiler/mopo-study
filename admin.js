@@ -909,7 +909,14 @@ async function admSettings() {
   (async () => {
     try {
       const st = await api("admin.prepAutoStat");
-      if ($("#prepauto")) $("#prepauto").checked = !!st.auto;
+      const ab = $("#prepauto");
+      if (ab) {
+        ab.checked = !!st.auto;
+        if (st.auto === null) {                          /* Google ещё не дал разрешение на расписание */
+          ab.parentNode.insertAdjacentHTML("afterend",
+            '<span class="hint tiny">Чтобы включить ночное обновление, в редакторе скрипта выберите функцию prepNightly, нажмите «Выполнить» и разрешите доступ.</span>');
+        }
+      }
       const l = st.light;
       $("#prepstat").innerHTML = l
         ? (l.left ? `<b class="inl">Копии устарели у ${l.left} из ${l.total} листов.</b> Нажмите «Подготовить копии таблиц».`
