@@ -957,17 +957,19 @@ async function admSettings() {
     b.textContent = "Остановить";
     const t0 = Date.now();
     const mmss = ms => (ms >= 60000 ? Math.floor(ms / 60000) + " мин " : "") + Math.round(ms % 60000 / 1000) + " сек";
-    let ready = 0, skip = 0, bad = [], total = 0, from = 0, last = "", pics = 0, picLast = "", picLeft = 0, more = true, note = "запрашиваем список листов…";
+    let ready = 0, skip = 0, bad = [], total = 0, from = 0, last = "", pics = 0, picLast = "", picLeft = 0, plan = 0, more = true, note = "запрашиваем список листов…";
     const paint = () => {
-      const seen = ready + skip + bad.length, gone = Date.now() - t0;
-      const per = ready ? gone / ready : 0, left = Math.max(0, total - seen);
-      box.innerHTML = `<p class="hint"><b>Напечатано: ${ready}</b>${skip ? " · уже были готовы: " + skip : ""}${total ? " · осталось: " + left + " из " + total : ""}<br>
+      const gone = Date.now() - t0;
+      const per = ready ? gone / ready : 0;
+      const left = plan ? Math.max(0, plan - ready) : 0;         /* считаем по тем, что реально надо подготовить */
+      box.innerHTML = `<p class="hint"><b>Напечатано: ${ready}${plan ? " из " + plan : ""}</b>${skip ? " · пропущено готовых: " + skip : ""}<br>
         ${pics ? "<b>Фото добавлено: " + pics + "</b>" + (picLast ? " — лист «" + esc(picLast) + "»" : "") + (picLeft ? ", осталось " + picLeft : "") + "<br>" : ""}
         Идёт ${mmss(gone)}${per && left ? " · осталось примерно " + mmss(per * left) : ""}<br>
         ${esc(note)}${last ? "<br>Последний готовый: " + esc(last) : ""}${bad.length ? "<br>Не получилось: " + bad.length : ""}</p>`;
     };
     paint();
     const tick = setInterval(paint, 1000);              /* время идёт, даже пока ждём ответ сервера */
+    try { const st0 = await api("admin.prepAutoStat"); if (st0 && st0.light) plan = st0.light.left; } catch (e) { /* посчитаем по ходу */ }
     try {
       do {
         note = "печатаем лист… первый лист большой таблицы может готовиться до минуты";
@@ -978,7 +980,8 @@ async function admSettings() {
           catch (e) { err = e; note = "сервер не ответил, пробуем ещё раз (" + tries + " из 3)"; paint(); await new Promise(res => setTimeout(res, 1500 * tries)); }
         }
         if (!r) {                                         /* лист не дался три раза — пропускаем его и идём дальше */
-          bad.push("лист №" + (from + 1) + " — " + ((err && err.message) || "сервер не ответил"));
+          bad.push("лист №" + (from + 1) + " в списке — " + ((err && err.message) || "сервер не ответил") +
+            ". Какой именно — покажет кнопка «Проверить, что устарело»");
           from = from + 1; more = total ? from < total : true;
           note = "пропустили лист, который не отвечает";
           paint();
@@ -989,7 +992,8 @@ async function admSettings() {
         total = r.total || total;
         (r.items || []).forEach(x => {
           if (x.state === "ready" || x.state === "cached") { ready++; last = x.title; }
-          else if (x.state === "pics") { pics += (x.added || 0); picLeft = x.left || 0; picLast = x.title; note = "подставляем фото в лист «" + x.title + "»"; }
+          else if (x.state === "pics") { pics += (x.added || 0); picLeft = x.left || 0; picLast = x.title;
+            if (!x.left) { ready++; last = x.title; }          /* фото досталили — лист готов целиком */ note = "подставляем фото в лист «" + x.title + "»"; }
           else if (x.state === "skip") skip++;
           else bad.push(x.title + (x.why ? " — " + x.why : ""));
         });
