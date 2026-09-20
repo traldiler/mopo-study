@@ -917,7 +917,8 @@ function pdfScroll(toc, tabs, note) {
   const TABSJ = JSON.stringify(list).replace(/</g, "\\u003c");
   const topBar = list.length ? `<div id="top"><div id="tabs"><label for="tsel">Лист</label>
     <select id="tsel">${list.map((t, i) => `<option value="${i}">${esc(t.name)}</option>`).join("")}</select>
-    <span id="tnum">1 из ${list.length}</span></div>${note ? `<div id="note">${esc(note)}</div>` : ""}</div>` : "";
+    <span id="tnum">1 из ${list.length}</span>
+    <span id="tpart" hidden><button type="button" id="pprev">‹</button><span id="ptxt"></span><button type="button" id="pnext">›</button></span></div>${note ? `<div id="note">${esc(note)}</div>` : ""}</div>` : "";
   return `<!doctype html><html><head><meta charset="utf-8"><style>
   html,body{margin:0;height:100%;background:#E9E8E5;font:13px Arial,sans-serif}
   #sc{position:absolute;left:0;right:0;top:var(--top,0px);bottom:44px;overflow:auto} body.side #sc{left:280px}
@@ -926,6 +927,9 @@ function pdfScroll(toc, tabs, note) {
   #tabs label{font:600 12px Arial;color:#6D6B72;text-transform:uppercase;letter-spacing:.04em}
   #tabs select{max-width:min(70vw,460px);border:1px solid #E5E3DF;background:#fff;border-radius:999px;padding:6px 12px;font:13px Arial;color:#232227;cursor:pointer}
   #tabs #tnum{font:12px Arial;color:#6D6B72}
+  #tabs #tpart{display:flex;gap:6px;align-items:center;font:12px Arial;color:#232227}
+  #tabs #tpart button{border:1px solid #E5E3DF;background:#fff;border-radius:999px;padding:3px 10px;font:13px Arial;cursor:pointer}
+  #tabs #tpart[hidden]{display:none}
   #note{padding:5px 12px;background:#FDF6F1;border-top:1px solid #F0DFD3;color:#8A5A00;font-size:12px}
   #side{position:absolute;left:0;top:var(--top,0px);bottom:44px;width:280px;overflow:auto;background:#fff;border-right:1px solid #E0DED9;box-sizing:border-box;padding:14px 10px 30px;display:none}
   body.side #side{display:block} #side h4{margin:2px 8px 10px;font:700 12px Arial;letter-spacing:.04em;text-transform:uppercase;color:#6D6B72}
@@ -945,9 +949,14 @@ function pdfScroll(toc, tabs, note) {
   #bar{position:absolute;left:0;right:0;bottom:0;height:44px;display:flex;align-items:center;justify-content:center;gap:10px;background:#232227;color:#fff}
   #bar button{background:rgba(255,255,255,.14);border:0;color:#fff;border-radius:999px;padding:6px 14px;font:600 13px Arial;cursor:pointer}
   #zv{min-width:46px;text-align:center} #num{opacity:.75;margin-left:10px}
-  #msg{padding:40px;text-align:center;color:#232227;font-size:15px}</style></head><body>
+  #msg{padding:40px;text-align:center;color:#232227;font-size:15px}
+  #htmlbox{display:none;padding:14px;background:#fff;transform-origin:0 0}
+  #htmlbox table{border-collapse:collapse;table-layout:fixed}
+  #htmlbox td{border:1px solid #E1DFDB;padding:4px 6px;vertical-align:top;font:12px/1.35 Arial;overflow-wrap:anywhere}
+  #htmlbox img{max-width:100%;height:auto;display:block;margin:0 auto 3px}
+  #htmlbox a{color:#C84E17} #htmlbox .cut{color:#6D6B72;font-size:12px;margin:10px 2px}</style></head><body>
   <div id="selbar"></div>${topBar}
-  <div id="side"><h4>Оглавление</h4><div id="toc"></div></div><div id="sc"><div id="pages"><div id="msg">Загружаем…</div></div></div>
+  <div id="side"><h4>Оглавление</h4><div id="toc"></div></div><div id="sc"><div id="htmlbox"></div><div id="pages"><div id="msg">Загружаем…</div></div></div>
   <div id="bar"><button id="tg" style="display:none">☰ Оглавление</button><button id="zm">−</button><span id="zv">100%</span><button id="zp">+</button><button id="zf">По ширине</button><span id="num"></span></div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script>(async function(){
@@ -960,7 +969,15 @@ function pdfScroll(toc, tabs, note) {
     var topEl=document.getElementById("top");
     function fixTop(){ document.documentElement.style.setProperty("--top",(topEl?topEl.offsetHeight:0)+"px"); }
     fixTop(); window.addEventListener("resize",fixTop);
-    function wait(text){ wrap.innerHTML='<div id="msg">'+text+'</div>'; }
+    var htmlbox=document.getElementById("htmlbox");
+    function showPdf(){ htmlbox.style.display="none"; wrap.style.display=""; }
+    function showHtml(html){                              /* лист, который Google не печатает, кабинет собирает сам */
+      wrap.style.display="none"; htmlbox.style.display="block"; htmlbox.innerHTML=html;
+      busyTab=false; pages=[]; document.getElementById("num").textContent="";
+      zoomHtml();
+    }
+    function zoomHtml(){ htmlbox.style.transform="scale("+z+")"; htmlbox.style.width=(100/z)+"%"; document.getElementById("zv").textContent=Math.round(z*100)+"%"; }
+    function wait(text){ showPdf(); wrap.innerHTML='<div id="msg">'+text+'</div>'; }
     /* один документ или один лист таблицы: страницы строим заново */
     async function boot(u){
       pdf=await pdfjsLib.getDocument({data:u}).promise;
@@ -1002,6 +1019,7 @@ function pdfScroll(toc, tabs, note) {
     }
     var io=new IntersectionObserver(function(es){ es.forEach(function(e){ if(e.isIntersecting) draw(+e.target.dataset.i,gen); }); },{root:sc,rootMargin:"600px 0px"});
     function layout(){
+      if(htmlbox && htmlbox.style.display==="block"){ zoomHtml(); return; }   /* на собранном листе масштаб применяем к таблице */
       gen++; var s=fit*z, top=sc.scrollTop/(sc.scrollHeight||1); wrap.innerHTML=""; io.disconnect();
       pages.forEach(function(x,i){ var b=document.createElement("div"); b.className="pg"; b.dataset.i=i;
         b.style.width=x.v.width*s+"px"; b.style.height=x.v.height*s+"px"; x.box=b; x.done=0; wrap.appendChild(b); io.observe(b); });
@@ -1124,19 +1142,32 @@ function pdfScroll(toc, tabs, note) {
     /* файл приходит от кабинета: документ — сразу, лист таблицы — по клику на вкладке */
     window.addEventListener("message",function(e){
       var d=e.data||{};
-      if(d.mopoPdf){ if(d.i!=null&&d.i!==curTab) return; boot(new Uint8Array(d.mopoPdf)); }
+      if(d.mopoPdf){ if(d.i!=null&&d.i!==curTab) return; if(d.part!=null&&d.part!==curPart) return; showPdf(); boot(new Uint8Array(d.mopoPdf)); }
+      if(d.mopoHtml!=null){ if(d.i!=null&&d.i!==curTab) return; showHtml(d.mopoHtml); }
       if(d.mopoErr&&(d.i==null||d.i===curTab)){ busyTab=false; wait("Не удалось открыть: "+d.mopoErr+"<br><br>Нажмите вкладку ещё раз."); }
     });
     var tsel=document.getElementById("tsel"), tnum=document.getElementById("tnum");
-    function askTab(i){
-      curTab=i; busyTab=true;
+    var tpart=document.getElementById("tpart"), ptxt=document.getElementById("ptxt"), curPart=0;
+    function paintPart(){
+      var n=(TABS[curTab]||{}).parts||1;
+      if(!tpart) return;
+      tpart.hidden = n<2;
+      if(n>1) ptxt.textContent="часть "+(curPart+1)+" из "+n;
+    }
+    function askTab(i,part){
+      curTab=i; curPart=Math.max(0,part||0); busyTab=true;
       if(tsel) tsel.value=String(i);
       if(tnum) tnum.textContent=(i+1)+" из "+TABS.length;
-      wait("Загружаем «"+((TABS[i]||{}).name||"лист")+"»… первое открытие может занять пару минут");
-      parent.postMessage({mopo:"needsheet",i:i},"*");
+      paintPart();
+      wait("Загружаем «"+((TABS[i]||{}).name||"лист")+"»"+(((TABS[i]||{}).parts||1)>1?", часть "+(curPart+1):"")+"… первое открытие может занять пару минут");
+      parent.postMessage({mopo:"needsheet",i:i,part:curPart},"*");
     }
-    if(tsel) tsel.onchange=function(){ askTab(+tsel.value); };
-    if(TABS.length) askTab(0); else { wait("Готовим документ…"); parent.postMessage({mopo:"pdfready"},"*"); }
+    if(tsel) tsel.onchange=function(){ askTab(+tsel.value,0); };
+    if(tpart){
+      document.getElementById("pprev").onclick=function(){ if(curPart>0) askTab(curTab,curPart-1); };
+      document.getElementById("pnext").onclick=function(){ var n=(TABS[curTab]||{}).parts||1; if(curPart<n-1) askTab(curTab,curPart+1); };
+    }
+    if(TABS.length) askTab(0,0); else { wait("Готовим документ…"); parent.postMessage({mopo:"pdfready"},"*"); }
   })().catch(function(e){ document.getElementById("pages").innerHTML='<div id="msg">Не удалось показать файл: '+e.message+'</div>'; });<\/script></body></html>`;
 }
 const SHEET_NOTE = "Это сохранённая копия таблицы: фильтры, сортировка и другие возможности Google Таблиц здесь не работают. " +
@@ -1147,21 +1178,22 @@ function renderDoc(frame, r, ref) {
     const names = (r.sheets || []).map(x => (typeof x === "string" ? { name: x } : x));
     const give = async e => {
       if (e.source !== frame.contentWindow || !e.data || e.data.mopo !== "needsheet") return;
-      const i = e.data.i;
+      const i = e.data.i, part = Math.max(0, e.data.part || 0);
       const send = (msg, transfer) => { try { frame.contentWindow.postMessage(msg, "*", transfer || []); } catch (e2) { } };
-      const ck = "sh:" + JSON.stringify(ref || {}) + ":" + (r.mt || "") + ":" + i;
+      const ck = "sh:" + JSON.stringify(ref || {}) + ":" + (r.mt || "") + ":" + i + ":" + part;
       const fetchOne = async () => {
-        const c = await api("doc.sheet", Object.assign({ i: i }, ref || {}));
-        if (!c || !c.pdf) throw new Error("Google не успел подготовить лист");
+        const c = await api("doc.sheet", Object.assign({ i: i, part: part }, ref || {}));
+        if (!c || (!c.pdf && c.html == null)) throw new Error("Google не успел подготовить лист");
         await docCachePut(ck, c);            /* в память кладём только целый лист: иначе пустышка застрянет навсегда */
         return c;
       };
       try {
         let c = await docCacheGet(ck);
-        if (!c || !c.pdf) { try { c = await fetchOne(); } catch (e1) { c = await fetchOne(); } }   /* вторая попытка: первая часто упирается в таймаут Google */
+        if (!c || (!c.pdf && c.html == null)) { try { c = await fetchOne(); } catch (e1) { c = await fetchOne(); } }   /* вторая попытка: первая часто упирается в таймаут Google */
+        if (c.html != null) { send({ mopoHtml: c.html, i: i }); return; }
         const buf = b64bytes(c.pdf).buffer;
-        send({ mopoPdf: buf, i: i }, [buf]);
-      } catch (err) { send({ mopoErr: String(err.message || err), i: i }); }
+        send({ mopoPdf: buf, i: i, part: part }, [buf]);
+      } catch (err) { send({ mopoErr: String(err.message || err), i: i, part: part }); }
     };
     frameListen(frame, give);
     frame.srcdoc = watermark(pdfScroll([], names, SHEET_NOTE));
