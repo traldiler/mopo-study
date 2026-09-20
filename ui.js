@@ -34,3 +34,22 @@ const dayRu = at => {
   if (isNaN(d.getTime())) { const m = String(at).match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? m[3] + "." + m[2] + "." + m[1] : String(at); }
   return d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" });
 };
+
+/* одно нажатие — одно действие: пока запрос идёт, повторный клик по той же кнопке не проходит
+   (двойной щелчок по «Отправить» создавал второй вопрос) */
+function once(fn) {
+  return async function (ev) {
+    const b = (ev && ev.currentTarget) || this;
+    if (b && b.dataset) {
+      if (b.dataset.busy === "1") return;
+      b.dataset.busy = "1"; b.disabled = true;
+    }
+    try { return await fn.apply(this, arguments); }
+    finally {
+      if (b && b.dataset) {
+        delete b.dataset.busy;
+        if (document.body.contains(b)) b.disabled = false;
+      }
+    }
+  };
+}

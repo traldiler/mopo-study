@@ -343,7 +343,7 @@ function forgotPassword(login0) {
         <button class="btn" data-a="1" type="button">Сменить пароль</button></div></div>`;
     back.querySelector('[data-a="0"]').onclick = close;
     back.querySelector("#fggen").onclick = () => { back.querySelector("#fgpass").value = genPassword(); };
-    back.querySelector('[data-a="1"]').onclick = async () => {
+    back.querySelector('[data-a="1"]').onclick = once(async () => {
       const code = back.querySelector("#fgcode").value.trim(), pass = back.querySelector("#fgpass").value;
       if (!code) return toast("Введите код из письма");
       if (pass.length < 6) return toast("Пароль — минимум 6 символов");
@@ -351,7 +351,7 @@ function forgotPassword(login0) {
         await api("password.reset", { login: login, code: code, password: pass });
         close(); $("#lg").value = login; $("#pw").value = pass; toast("Пароль изменён — нажмите «Войти»");
       } catch (e) { fail(e); }
-    };
+    });
   };
   step1(); document.body.appendChild(back); lockScroll(true);
 }
@@ -386,6 +386,22 @@ if (typeof MutationObserver !== "undefined") document.addEventListener("DOMConte
   const h = document.getElementById("htitle");
   if (h) new MutationObserver(syncDocTitle).observe(h, { childList: true, characterData: true, subtree: true });
 });
+/* новые ответы РОПа: пока сотрудник их не открыл, светятся зелёным в меню */
+const qSeenKey = () => "mopo-qseen-" + (APP.user ? APP.user.id : "x");
+function qSeen() {
+  try { return new Set(JSON.parse(localStorage.getItem(qSeenKey()) || "[]")); } catch (e) { return new Set(); }
+}
+function qFresh() {                                    /* ответы, которых сотрудник ещё не видел */
+  const list = (MYQ.data && MYQ.data.questions) || [];
+  const seen = qSeen();
+  return list.filter(q => q.answer && !seen.has(String(q.id)));
+}
+function qMarkSeen() {
+  const list = (MYQ.data && MYQ.data.questions) || [];
+  const ids = list.filter(q => q.answer).map(q => String(q.id));
+  try { localStorage.setItem(qSeenKey(), JSON.stringify(ids)); } catch (e) { /* приватный режим */ }
+}
+
 function renderNav() {
   const n = $("#nav"); n.hidden = false; n.innerHTML = "";
   document.body.classList.remove("is-login");
@@ -396,10 +412,16 @@ function renderNav() {
     : [["adm:students", "Ученики"], ["adm:attempts", "Экзамены"], ["adm:questions", dev ? "Вопросы МОПОв" : "Вопросы"]]
         .concat(dev ? [["adm:devq", "Вопросы РОПов"]] : [["questions", "Разработчику"]])
         .concat([["adm:users", "Сотрудники"], ["adm:materials", "Материалы"], ["adm:settings", "Настройки"]]);
+  const новыеОтветы = mopo ? qFresh().length : 0;
   items.forEach(([k, t]) => {
     const b = el("button", "", t); b.type = "button"; b.dataset.k = k;
     b.setAttribute("aria-current", APP.screen === k ? "true" : "false");
     b.onclick = () => examNow && k !== "exam" ? leaveExam(k) : go(k);
+    if (k === "questions" && новыеОтветы) {            /* РОП ответил — подсказываем зайти */
+      const i = el("i", "badge good", новыеОтветы > 99 ? "99+" : String(новыеОтветы));
+      i.title = plural(новыеОтветы, "новый ответ", "новых ответа", "новых ответов") + " от РОПа";
+      b.appendChild(i);
+    }
     n.appendChild(b);
   });
   if (staff) {
@@ -1718,22 +1740,27 @@ async function screenQuestions() {
   } catch (e) { return fail(e); }
   const list = (r.questions || []).slice().sort((a, b) => String(b.at).localeCompare(String(a.at)));
   const nAns = list.filter(q => q.answer).length, nWait = list.length - nAns;
+  const ВИДЕЛ = staff ? new Set() : qSeen();           /* что сотрудник уже открывал — до отметки ниже */
+  const плюрал = n => plural(n, "новый ответ", "новых ответа", "новых ответов");
+  const новых = list.filter(q => q.answer && !ВИДЕЛ.has(String(q.id))).length;
+  if (!staff) { qMarkSeen(); renderNav(); }            /* зашёл — значок в меню гаснет */
   $("#app").innerHTML = `<div class="card">
       <div class="qhead"><div><h2>${staff ? "Вопросы разработчику" : "Мои вопросы"}</h2>
         <p class="lead">${staff ? "Что-то не работает, нужна доработка или новый раздел — напишите здесь. Ответ придёт сюда же."
           : "Всё, что вы спрашивали у РОПа по материалам. Ответ приходит сюда — и остаётся, к нему можно вернуться."}</p></div></div>
       ${staff ? `<div class="devask"><textarea id="dqtext" placeholder="Опишите вопрос или задачу"></textarea>
         <button class="btn" id="dqsend" type="button">Отправить разработчику</button></div>` : ""}
+      ${новых ? `<div class="note ok"><b>Есть ${плюрал(новых)}.</b> Отмечены зелёным ниже.</div>` : ""}
       <div class="seg wide" id="qseg">
         <button type="button" data-f="all">Все <i>${list.length}</i></button>
         <button type="button" data-f="ans">Отвеченные <i>${nAns}</i></button>
         <button type="button" data-f="wait">Ждут ответа <i>${nWait}</i></button></div>
       <div id="qlist"></div></div>`;
-  if (staff) $("#dqsend").onclick = async () => {
+  if (staff) $("#dqsend").onclick = once(async () => {
     const text = $("#dqtext").value.trim();
     if (text.length < 3) return toast("Напишите вопрос");
     try { await api("question.ask", { text: text }); MYQ.data = null; toast("Отправлено разработчику"); screenQuestions(); } catch (e) { fail(e); }
-  };
+  });
   const draw = () => {
     $("#qseg").querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.f === QUI.filter));
     const host = $("#qlist"); host.innerHTML = "";
@@ -1741,9 +1768,10 @@ async function screenQuestions() {
     if (!list.length) { host.innerHTML = '<p class="hint">Вопросов пока нет. Кнопка «Спросить РОПа» есть в каждом материале.</p>'; return; }
     if (!f.length) { host.innerHTML = '<p class="hint">В этом разделе пусто.</p>'; return; }
     f.forEach(q => {
-      const c = el("div", "qitem " + (q.answer ? "answered" : "waiting"));
+      const свежий = !staff && q.answer && !ВИДЕЛ.has(String(q.id));
+      const c = el("div", "qitem " + (q.answer ? "answered" : "waiting") + (свежий ? " fresh" : ""));
       c.innerHTML = `<div class="nc-head">
-          <span class="tag ${q.answer ? "ok" : "wait"}">${q.answer ? "есть ответ" : "ждёт ответа"}</span>
+          <span class="tag ${q.answer ? "ok" : "wait"}">${q.answer ? (свежий ? "новый ответ" : "есть ответ") : "ждёт ответа"}</span>
           <b>${esc(q.lessonTitle || "Общий вопрос")}</b>
           <span class="hint">${esc(dayRu(q.at))}</span></div>
         <p class="qq">${esc(q.text)}</p>
@@ -1770,14 +1798,14 @@ async function screenQuestions() {
           const box = c.querySelector(".qedit"), ta = box.querySelector("textarea");
           ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);
           box.querySelector("[data-no]").onclick = () => draw();
-          box.querySelector("[data-ok]").onclick = async () => {
+          box.querySelector("[data-ok]").onclick = once(async () => {
             const text = ta.value.trim();
             if (text.length < 3) return toast("Напишите вопрос");
             try { await api("question.edit", { id: q.id, text: text }); q.text = text; MYQ.at = 0; draw(); toast("Вопрос изменён"); }
             catch (e) { fail(e); }
-          };
+          });
         };
-        del.onclick = async () => {
+        del.onclick = once(async () => {
           if (!await ask({ title: "Удалить вопрос?", danger: true, ok: "Удалить", cancel: "Не удалять",
               text: "Вы уверены, что хотите удалить вопрос? " + (isStaff(APP.user) ? "Разработчик" : "РОП") + " его больше не увидит.<br><br>«" + esc(q.text) + "»" })) return;
           try {
@@ -1785,7 +1813,7 @@ async function screenQuestions() {
             if (MYQ.data) MYQ.data.questions = (MYQ.data.questions || []).filter(x => x.id !== q.id);
             toast("Вопрос удалён"); screenQuestions();
           } catch (e) { fail(e); }
-        };
+        });
         right.appendChild(ed); right.appendChild(del); foot.appendChild(right);
       }
       if (foot.querySelector("button")) c.appendChild(foot);
@@ -2080,13 +2108,13 @@ function screenProfile(editing) {
     $("#pfbd").addEventListener("blur", vDate);
     $("#pfmail").addEventListener("blur", vMail);
     ["#pfbd", "#pfmail"].forEach(sel => $(sel).addEventListener("input", () => { $(sel).classList.remove("bad"); }));
-    $("#pfsave").onclick = async () => {
+    $("#pfsave").onclick = once(async () => {
       const rd = vDate(), rm = vMail();
       if (rd.error || rm.error) return;
       const d = { birthday: rd.iso || "", email: rm.ok || "" };
       if (admin) { d.fio = $("#pffio").value.trim().replace(/\s+/g, " "); if (d.fio.length < 2) return toast("Напишите имя и фамилию"); }
       try { await api("profile.save", d); Object.assign(APP.user, d); renderNav(); screenProfile(false); toast("Профиль сохранён"); } catch (e) { fail(e); }
-    };
+    });
   }
   if (admin) {
     $("#pf1").oninput = () => { $("#pfcopy").hidden = !$("#pf1").value; };
@@ -2094,12 +2122,12 @@ function screenProfile(editing) {
     $("#pfcopy").onclick = async () => {
       try { await navigator.clipboard.writeText($("#pf1").value); toast("Пароль скопирован"); } catch (e) { $("#pf1").select(); toast("Скопируйте вручную: пароль выделен"); }
     };
-    $("#pwsave").onclick = async () => {
+    $("#pwsave").onclick = once(async () => {
       const b = $("#pf1").value;
       if (b.length < 6) return toast("Пароль — минимум 6 символов. Или нажмите «Сгенерировать»");
       try { await api("profile.password", { password: b }); $("#pf1").value = ""; $("#pfcopy").hidden = true; toast("Пароль изменён — сохраните его"); }
       catch (e) { fail(e); }
-    };
+    });
   }
 }
 
@@ -2116,7 +2144,7 @@ function askRop(l) {
       <button class="btn" data-a="1" type="button">Отправить</button></div></div>`;
   document.body.appendChild(back); lockScroll(true);
   back.querySelector('[data-a="0"]').onclick = () => { back.remove(); lockScroll(false); };
-  back.querySelector('[data-a="1"]').onclick = async () => {
+  back.querySelector('[data-a="1"]').onclick = once(async () => {
     const text = back.querySelector("#qtext").value.trim();
     if (!text) { toast("Напишите вопрос"); return; }
     try {
@@ -2126,7 +2154,7 @@ function askRop(l) {
       else waNotice({ to: "rop", group: PR.progress.waGroup || "", title: "Вопрос отправлен РОПу",
         text: `Оставил(а) вопрос в сервисе обучения МОПО по уроку «${l.title}»: ${text}` });
     } catch (e) { fail(e); }
-  };
+  });
 }
 
 /* запрос уже лежит в кабинете РОПа/разработчика; WhatsApp — только чтобы увидели быстрее.
@@ -2255,6 +2283,9 @@ async function start() {
       if (!APP.demo) { outLoad(); applyBoot(b); outFlush(); }
     } else if (!APP.demo) { outLoad(); outFlush(); }
     if (!APP.demo && isStaff(APP.user)) setTimeout(() => adminPrefetch(), 1500);
+    if (!isStaff(APP.user) && !MYQ.data) setTimeout(() => {          /* ответы РОПа — чтобы значок в меню загорелся сразу */
+      api("my.questions").then(x => { MYQ.data = x; MYQ.at = Date.now(); renderNav(); }).catch(() => { });
+    }, 1200);
     if (!(await locRestore().catch(() => false))) go(isStaff(APP.user) && staffMode() === "admin" ? "adm:students" : "cabinet");
     locSave();
   } catch (e) { screenLogin(); }

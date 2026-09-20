@@ -93,7 +93,7 @@ async function admStudents() {
       const passed = qs.filter(q => (st.quizzes || {})[q] && st.quizzes[q].passed).length;
       return !(dn === lessons.length && passed === qs.length);
     });
-    card.querySelector('[data-a="access"]').onclick = async () => {
+    card.querySelector('[data-a="access"]').onclick = once(async () => {
       let force = false;
       if (!st.examAllowed && notReady.length) {
         const ok = await ask({ title: "Блоки ещё не закрыты", danger: true, ok: "Всё равно допустить", cancel: "Отмена",
@@ -107,7 +107,7 @@ async function admStudents() {
         toast(st.examAllowed ? "Экзамен закрыт" : force ? "Экзамен открыт досрочно" : "Экзамен открыт");
         admStudents();
       } catch (e) { fail(e); }
-    };
+    });
     card.querySelector('[data-a="detail"]').onclick = () => {
       const box = card.querySelector(".sdetail"), btn = card.querySelector('[data-a="detail"]');
       if (!box.innerHTML) {
@@ -179,8 +179,8 @@ async function admAttempts() {
           <button class="mdel" data-del="${i}" type="button">Удалить</button></td></tr>`).join("");
     box.appendChild(t);
     t.querySelectorAll(".arow").forEach(r => r.onclick = ev => { if (ev.target.closest("button")) return; admAttempt(shown[+r.dataset.i].id); });
-    t.querySelectorAll("[data-arch]").forEach(b => b.onclick = () => attemptArchive(shown[+b.dataset.arch], admAttempts));
-    t.querySelectorAll("[data-del]").forEach(b => b.onclick = () => attemptDelete(shown[+b.dataset.del], admAttempts));
+    t.querySelectorAll("[data-arch]").forEach(b => b.onclick = once(() => attemptArchive(shown[+b.dataset.arch], admAttempts)));
+    t.querySelectorAll("[data-del]").forEach(b => b.onclick = once(() => attemptDelete(shown[+b.dataset.del], admAttempts)));
   };
   $("#atseg").querySelectorAll("button").forEach(b => b.onclick = () => { F.seg = b.dataset.s; draw(); });
   $("#atwho").onchange = e => { F.who = e.target.value; draw(); };
@@ -240,8 +240,8 @@ async function admAttempt(id) {
     $("#atoggle").textContent = box.hidden ? "Показать ответы по заданиям" : "Скрыть ответы";
   };
   $("#aback").onclick = admAttempts;
-  $("#aarch").onclick = () => attemptArchive(a, admAttempts);
-  $("#adel").onclick = () => attemptDelete(a, admAttempts);
+  $("#aarch").onclick = once(() => attemptArchive(a, admAttempts));
+  $("#adel").onclick = once(() => attemptDelete(a, admAttempts));
   $("#arep").onclick = () => printReport(a, "full");
   $("#afb").onclick = () => printReport(a, "feedback");
 }
@@ -394,7 +394,7 @@ function userForm(u, reset) {
   };
   const close = () => { back.remove(); lockScroll(false); };
   back.querySelector('[data-a="0"]').onclick = close;
-  back.querySelector('[data-a="1"]').onclick = async () => {
+  back.querySelector('[data-a="1"]').onclick = once(async () => {
     const d = { id: u ? u.id : "", fio: back.querySelector("#ufio").value.trim(), login: back.querySelector("#ulogin").value.trim(),
       password: pass.value, role: back.querySelector("#urole").value };
     if (!d.fio || (!u && (!d.login || !d.password))) { toast("Заполните имя, логин и пароль"); return; }
@@ -407,21 +407,21 @@ function userForm(u, reset) {
       toast(логинСменили ? "Логин изменён на «" + d.login + "» — передайте его сотруднику"
         : d.password ? "Сохранено — передайте новый пароль сотруднику" : "Сохранено");
     } catch (e) { fail(e); }
-  };
+  });
   const TXT = { blocked: ["Закрыть доступ?", "Сотрудник больше не сможет войти. Прогресс сохранится, доступ можно вернуть.", "Закрыть доступ"],
                 archived: ["Перенести в архив?", "Сотрудник пропадёт из списка учеников и не сможет войти. Всё, что он прошёл, сохранится — вернуть можно в любой момент.", "В архив"],
                 active: ["Открыть доступ?", "Сотрудник снова сможет войти и продолжит с того места, где остановился.", "Открыть"] };
-  back.querySelectorAll("[data-s]").forEach(b => b.onclick = async () => {
+  back.querySelectorAll("[data-s]").forEach(b => b.onclick = once(async () => {
     const [title, text, ok] = TXT[b.dataset.s];
     if (!await ask({ title: title, text: text, ok: ok, danger: b.dataset.s !== "active" })) return;
     try { await api("admin.userStatus", { id: u.id, status: b.dataset.s }); close(); admUsers(); toast("Готово"); } catch (e) { fail(e); }
-  });
+  }));
   const del = back.querySelector("[data-del]");
-  if (del) del.onclick = async () => {
+  if (del) del.onclick = once(async () => {
     if (!await ask({ title: "Удалить навсегда?", danger: true, ok: "Удалить",
         text: `<b>${esc(u.fio)}</b> — профиль, прогресс, заметки, вопросы и результаты экзаменов будут стёрты. Это нельзя отменить.` })) return;
     try { await api("admin.userDelete", { id: u.id }); close(); admUsers(); toast("Сотрудник удалён"); } catch (e) { fail(e); }
-  };
+  });
 }
 
 /* ---------- материалы ---------- */
@@ -566,10 +566,10 @@ async function admMaterials(local) {                 /* local — своя ко�
     [[-1, "↑", "Поднять блок выше"], [1, "↓", "Опустить блок ниже"]].forEach(([dir, t, tip]) => {
       const mv = el("button", "mmove", t); mv.type = "button"; mv.title = tip;
       mv.disabled = dir < 0 ? bi === 0 : bi === d.blocks.length - 1;
-      mv.onclick = async () => {
+      mv.onclick = once(async () => {
         try { await api("admin.blockMove", { n: b.n, dir: dir }); PR.program = null; EX.data = null; await admMaterials(); toast("Порядок блоков изменён — номера пересчитаны"); }
         catch (e) { fail(e); }
-      };
+      });
       bb.appendChild(mv);
     });
     headBtns(bb, "block", b); hb.appendChild(bb);
@@ -747,22 +747,22 @@ function lessonForm(l, d) {
   const redraw = () => { fillBlocks(); fillSubs(); fillAfter(); preview(); refreshDel(); refreshExam(); };
   back.querySelectorAll("[data-x]").forEach(b => b.onclick = () => { $$("#" + b.dataset.x).hidden = true; if (b.dataset.x === "nsBox") $$("#nsOpen").hidden = false; });
   $$("#nsOpen").onclick = () => { $$("#nsBox").hidden = false; $$("#nsOpen").hidden = true; $$("#nsTitle").focus(); };
-  $$("#bdel button").onclick = async () => {
+  $$("#bdel button").onclick = once(async () => {
     const b = d.blocks.filter(x => Number(x.n) === Number(S.block))[0];
     if (!await ask({ title: "Удалить блок?", danger: true, ok: "Удалить", text: `Блок «${esc(b.title)}» пустой — в нём нет материалов. Удалить его?` })) return;
     try {
       await api("admin.blockDel", { n: b.n }); Object.assign(d, await matData());
       S.block = (d.blocks[0] || {}).n; S.sub = ""; S.after = l ? "keep" : "end"; redraw(); toast("Блок удалён");
     } catch (e) { fail(e); }
-  };
-  $$("#sdel button").onclick = async () => {
+  });
+  $$("#sdel button").onclick = once(async () => {
     const sub = d.subs.filter(x => String(x.id) === S.sub)[0];
     if (!await ask({ title: "Удалить тему?", danger: true, ok: "Удалить", text: `Тема «${esc(sub.title)}» пустая. Удалить её?` })) return;
     try {
       await api("admin.subDel", { id: sub.id }); Object.assign(d, await matData());
       S.sub = ""; S.after = "end"; redraw(); toast("Тема удалена");
     } catch (e) { fail(e); }
-  };
+  });
   redraw();
   $$("#lblock").onchange = e => {
     if (e.target.value === "__new") { $$("#nbBox").hidden = false; $$("#nbTitle").focus(); e.target.value = S.block; return; }
@@ -775,7 +775,7 @@ function lessonForm(l, d) {
   $$("#lafter").onchange = e => { S.after = e.target.value; preview(); };
   ["#ltitle", "#lkind", "#lnote", "#lready", "#lact"].forEach(sel => $$(sel).addEventListener("input", preview));
   ["#lready", "#lact", "#lkind"].forEach(sel => $$(sel).addEventListener("change", preview));
-  $$("#nbOk").onclick = async () => {
+  $$("#nbOk").onclick = once(async () => {
     const title = $$("#nbTitle").value.trim(); if (!title) return toast("Напишите название блока");
     try {
       const r = await api("admin.blockSave", { data: { title: title } });
@@ -783,8 +783,8 @@ function lessonForm(l, d) {
       S.block = r.n; S.sub = ""; $$("#nbBox").hidden = true; $$("#nbTitle").value = "";
       redraw(); toast("Блок создан");
     } catch (e) { fail(e); }
-  };
-  $$("#nsOk").onclick = async () => {
+  });
+  $$("#nsOk").onclick = once(async () => {
     const title = $$("#nsTitle").value.trim(); if (!title) return toast("Напишите название темы");
     try {
       const inExam = await choose({ title: `Включить тему «${title}» в экзамен?`,
@@ -799,11 +799,11 @@ function lessonForm(l, d) {
       redraw();
       toast(inExam === "yes" ? "Тема создана и включена в экзамен. Вопросы выберите в «Материалах» — строка «Экзамен» у темы" : "Тема создана, в экзамен не входит");
     } catch (e) { fail(e); }
-  };
+  });
   const close = () => { back.remove(); lockScroll(false); };
   $$('[data-a="0"]').onclick = close;
   if ($$('[data-a="del"]')) $$('[data-a="del"]').onclick = async () => { if (await delMaterial("lesson", l, d)) { close(); admMaterials(); } };
-  $$('[data-a="1"]').onclick = async () => {
+  $$('[data-a="1"]').onclick = once(async () => {
     const data = { id: l ? l.id : "", block: S.block, sub: S.sub, title: $$("#ltitle").value.trim(), kind: $$("#lkind").value,
       url: $$("#lurl").value.trim(), note: $$("#lnote").value.trim(), after: S.after,
       ready: $$("#lready").checked, active: $$("#lact").checked };
@@ -816,7 +816,7 @@ function lessonForm(l, d) {
       if (l) Object.assign(l, fields); else d.lessons.push(Object.assign({ id: r.id, order: 99999, createdBy: APP.user.id }, fields));
       close(); PR.program = null; admMaterials(d); toast("Сохранено");
     } catch (e) { btn.disabled = false; btn.textContent = "Сохранить"; fail(e); }
-  };
+  });
 }
 
 /* ---------- вопросы: от МОПО — РОПу, от РОПов — разработчику ---------- */
@@ -847,11 +847,11 @@ async function admQuestions(box) {
       if (!q.answer) {
         const ta = el("textarea"); ta.placeholder = dev ? "Ответ РОПу" : "Ответ сотруднику";
         const b = el("button", "btn", "Ответить"); b.type = "button";
-        b.onclick = async () => {
+        b.onclick = once(async () => {
           if (!ta.value.trim()) { toast("Напишите ответ"); return; }
           try { await api("admin.answer", { id: q.id, answer: ta.value.trim() }); toast("Ответ сохранён"); refreshBadges(); admQuestions(box); }
           catch (e) { fail(e); }
-        };
+        });
         c.appendChild(ta); c.appendChild(b);
       }
       box2.appendChild(c);
@@ -907,7 +907,7 @@ async function admSettings() {
 
   $("#drvcheck").onclick = () => drvStatus();
   if ($("#accload")) $("#accload").onclick = () => accFiles();
-  $("#csave").onclick = async () => {
+  $("#csave").onclick = once(async () => {
     const g = $("#wagroup").value.trim();
     if (g && !/^https:\/\/chat\.whatsapp\.com\/\S+$/.test(g)) return toast("Ссылка на группу должна начинаться с https://chat.whatsapp.com/");
     try {
@@ -915,7 +915,7 @@ async function admSettings() {
       if (PR.progress) PR.progress.waGroup = g;
       toast("Сохранено");
     } catch (e) { fail(e); }
-  };
+  });
 
   /* быстрый ответ: включено ли ночное обновление и что известно о копиях */
   (async () => {

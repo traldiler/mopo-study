@@ -1622,3 +1622,9 @@ label.f{font-family:var(--f-text); font-size:13px; font-weight:600; letter-spaci
 
 /* ошибка входа — заметным цветом, а не как подсказка */
 .hint.bad{color:var(--bad-ink); font-weight:600;}
+
+/* новый ответ РОПа: зелёный значок в меню и рамка у карточки вопроса */
+.top nav .badge.good{background:var(--ok-ink,#14795A);}
+.qitem.fresh{border-color:var(--ok-ink,#14795A); box-shadow:0 0 0 2px var(--ok-soft,#E4F4EC);}
+.qitem.fresh .tag.ok{background:var(--ok-ink,#14795A); color:#fff;}
+.note.ok{background:var(--ok-soft,#E4F4EC); color:var(--ok-ink,#14795A); border-radius:12px; padding:10px 12px; margin:10px 0;}
