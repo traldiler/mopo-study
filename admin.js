@@ -27,6 +27,7 @@ async function refreshBadges() {
     if (!i) { i = el("i", "badge"); btn.appendChild(i); }
     i.textContent = n > 99 ? "99+" : n;
   };
+  set("adm:materials", b.prepLeft || 0);        /* устаревшие копии таблиц: видно прямо на вкладке «Материалы» */
   set("adm:questions", b.questions || 0);
   set("adm:devq", b.devQuestions || 0);
   set("adm:users", b.resets || 0);
@@ -849,6 +850,7 @@ async function admQuestions(box) {
   draw();
 }
 
+const PREP = { run: false, stop: false };
 /* ---------- настройки ---------- */
 async function admSettings() {
   const host = $("#admbody");
@@ -865,9 +867,12 @@ async function admSettings() {
         Для этого у почты, от которой работает кабинет, должен быть доступ к файлам. Видео Google Диск через кабинет не пропускает —
         их открываем «по ссылке, только просмотр» одной кнопкой.</p>
       <div class="foot"><button class="btn white" id="drvcheck" type="button">Проверить доступ к файлам</button>
-        <button class="btn white" id="prep" type="button">Подготовить копии таблиц</button></div>
+        <button class="btn white" id="prep" type="button">Подготовить копии таблиц</button>
+        <label class="f inline"><input type="checkbox" id="prepall"> перепечатать все заново</label>
+        ${APP.user.role === "dev" ? '<label class="f inline"><input type="checkbox" id="prepauto" disabled> обновлять копии ночью автоматически</label>' : ""}</div>
       <p class="hint tiny">«Подготовить копии» — сервис заранее печатает каждый лист таблиц в PDF и хранит у себя на Диске.
-        После этого таблицы открываются у сотрудников сразу. Делать это нужно один раз и после правок в таблицах.</p>
+        Уже готовые листы пропускаются, печатаются только новые и изменённые, так что повторные запуски быстрые.
+        Кнопку можно нажать ещё раз, чтобы остановиться, и потом продолжить с того же места.</p>
       <div id="prepres"></div>
       <div id="drvres"></div></div>
     ${APP.user.role === "dev" ? `<div class="card" id="acccard"><h2>Доступ сотрудников к самим документам</h2>
@@ -881,32 +886,61 @@ async function admSettings() {
       <div id="accres"></div></div>` : ""}`;
   $("#drvcheck").onclick = () => drvStatus();
   if ($("#accload")) $("#accload").onclick = () => accFiles();
-  $("#prep").onclick = async () => {                     /* печатаем копии листов порциями: один лист может готовиться до минуты */
-    const b = $("#prep"), box = $("#prepres");
-    b.disabled = true;
-    let from = 0, done = 0, bad = [], total = 0;
+  const prepStat = async () => {
+    try {
+      const st = await api("admin.prepStat");
+      $("#prepres").innerHTML = `<p class="hint">Листов в таблицах: ${st.total}. Готовых копий: ${st.ready}.
+        ${st.left ? `<b class="inl">Копии устарели у ${st.left} — нажмите «Подготовить копии таблиц».</b>`
+                  : "Всё готово — сотрудники открывают таблицы сразу."}</p>`;
+      const auto = $("#prepauto");
+      if (auto) { auto.checked = !!st.auto; auto.disabled = false; }
+    } catch (e) { /* не страшно: покажем после нажатия */ }
+  };
+  prepStat();
+  if ($("#prepauto")) $("#prepauto").onchange = async () => {
+    const box = $("#prepauto");
+    box.disabled = true;
+    try { await api("admin.prepAuto", { on: box.checked }); toast(box.checked ? "Ночное обновление включено — в 3:00" : "Ночное обновление выключено"); }
+    catch (e) { fail(e); box.checked = !box.checked; }
+    box.disabled = false;
+  };
+  $("#prep").onclick = async () => {
+    const b = $("#prep"), box = $("#prepres"), force = $("#prepall") && $("#prepall").checked;
+    if (PREP.run) { PREP.stop = true; return; }                    /* второе нажатие — остановить */
+    PREP.run = true; PREP.stop = false;
+    b.textContent = "Остановить";
+    const t0 = Date.now(), mmss = ms => Math.floor(ms / 60000) + " мин " + Math.round(ms % 60000 / 1000) + " сек";
+    let from = 0, ready = 0, skip = 0, bad = [], total = 0, last = "";
+    const paint = () => {
+      const seen = ready + skip + bad.length, gone = Date.now() - t0;
+      const per = ready ? gone / ready : 0;                          /* считаем по реально напечатанным */
+      const left = Math.max(0, total - seen);
+      box.innerHTML = `<p class="hint"><b>Подготовлено: ${ready}</b> · уже были готовы: ${skip} · осталось: ${left} из ${total}.<br>
+        Идёт ${mmss(gone)}${per && left ? " · осталось примерно " + mmss(per * left) : ""}.<br>
+        ${last ? "Сейчас: " + esc(last) : ""}${bad.length ? "<br>Не получилось: " + bad.length : ""}</p>`;
+    };
     try {
       do {
-        const r = await api("admin.prepare", { from: from, count: 3 });
-        done += r.done; bad = bad.concat(r.fail || []); total = r.total || total;
-        b.textContent = "Готовим… " + (done + bad.length) + " из " + total;
-        box.innerHTML = `<p class="hint">Готово листов: ${done} из ${total}. Можно закрыть страницу — прогресс сохраняется на сервере,
-          но тогда придётся нажать кнопку ещё раз, чтобы доделать остальные.</p>`;
+        let r = null, tries = 0;
+        while (!r && tries < 3) {                                   /* сбой одного запроса — не повод бросать всю подготовку */
+          tries++;
+          try { r = await api("admin.prepare", { from: from, count: 2, force: force }); }
+          catch (e) { if (tries >= 3) throw e; await new Promise(res => setTimeout(res, 1500 * tries)); }
+        }
+        total = r.total || total;
+        (r.items || []).forEach(x => {
+          if (x.state === "ready") { ready++; last = x.title; }
+          else if (x.state === "skip") skip++;
+          else bad.push(x.title + (x.why ? " — " + x.why : ""));
+        });
+        paint();
         from = r.next || 0;
-      } while (from);
-      box.innerHTML = `<p class="hint">Готово: ${done} из ${total}.${bad.length ? " Не получилось: " + bad.length + "." : " Все листы подготовлены."}</p>` +
-        (bad.length ? `<div class="note warn"><ul>${bad.slice(0, 12).map(x => `<li>${esc(x)}</li>`).join("")}</ul></div>` : "");
-    } catch (e) { fail(e); }
-    b.disabled = false; b.textContent = "Подготовить копии таблиц";
-  };
-  $("#csave").onclick = async () => {
-    const g = $("#wagroup").value.trim();
-    if (g && !/^https:\/\/chat\.whatsapp\.com\/\S+$/.test(g)) return toast("Ссылка на группу должна начинаться с https://chat.whatsapp.com/");
-    try {
-      await api("admin.setting", { key: "waGroup", value: g });
-      if (PR.progress) PR.progress.waGroup = g;
-      toast("Сохранено");
-    } catch (e) { fail(e); }
+      } while (from && !PREP.stop);
+      box.insertAdjacentHTML("beforeend", `<p class="hint">${PREP.stop ? "Остановлено." : "Готово."} Напечатано ${ready} за ${mmss(Date.now() - t0)}.
+        ${bad.length ? "Не получилось: " + bad.length + "." : ""}</p>` +
+        (bad.length ? `<div class="note warn"><ul>${bad.slice(0, 12).map(x => `<li>${esc(x)}</li>`).join("")}</ul></div>` : ""));
+    } catch (e) { fail(e); box.insertAdjacentHTML("beforeend", `<p class="hint">Остановились на ${ready + skip} из ${total}. Нажмите кнопку ещё раз — продолжим с того же места.</p>`); }
+    PREP.run = false; b.disabled = false; b.textContent = "Подготовить копии таблиц";
   };
 }
 

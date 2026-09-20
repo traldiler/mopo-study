@@ -1601,3 +1601,6 @@ label.f{font-family:var(--f-text); font-size:13px; font-weight:600; letter-spaci
 .accrow a{color:var(--accent-ink); font-size:12.5px; white-space:nowrap; text-decoration:none; border-bottom:1px solid currentColor;}
 .accmark{font-style:normal; font-size:12px; color:transparent; min-width:52px; text-align:right;}
 .accmark.on{color:var(--ok-ink); font-weight:700;}
+
+.f.inline{display:inline-flex; gap:6px; align-items:center; font-size:13px; color:var(--muted); text-transform:none; letter-spacing:0;}
+.f.inline input{width:16px; height:16px; accent-color:var(--accent);}
