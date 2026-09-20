@@ -749,7 +749,7 @@ function driveEmbed(url) {
   return url;
 }
 const NOFRAME = /(^|\/\/)(www\.)?prom-import\.com/i;   /* сайт Пром-Импорта пока запрещает встраивание (X-Frame-Options) */
-function isInternal(u) { return /^(konspekt|shemy)\//.test(String(u)); }
+function isInternal(u) { return /^(konspekt|shemy|praktika)\//.test(String(u)); }
 /* маркеры для выделений: 5 цветов, одинаковые в кабинете и в конспекте */
 const MARKERS = [null, { n: "жёлтый", c: "#FFE070" }, { n: "зелёный", c: "#8EDDA4" }, { n: "голубой", c: "#9CC4FF" },
                  { n: "розовый", c: "#FFA9C9" }, { n: "оранжевый", c: "#FFBE7D" }];
@@ -841,7 +841,7 @@ function docInject(html, sheet) {
   h = h.includes("</body>") ? h.replace("</body>", tail + "</body>") : h + tail;
   return watermark(h);
 }
-function pdfPage(b64) {
+function pdfPage() {
   return `<!doctype html><html><head><meta charset="utf-8"><style>
   html,body{margin:0;height:100%;background:#2E2D33;overflow:hidden;font:13px Arial,sans-serif}
   #st{position:absolute;inset:0 0 46px 0;display:flex;align-items:center;justify-content:center}
@@ -861,7 +861,9 @@ function pdfPage(b64) {
     var W="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
     try{ var wt=await (await fetch(W)).text(); pdfjsLib.GlobalWorkerOptions.workerSrc=URL.createObjectURL(new Blob([wt],{type:"text/javascript"})); }
     catch(e){ pdfjsLib.GlobalWorkerOptions.workerSrc=W; }
-    var raw=atob("${b64}"), u=new Uint8Array(raw.length); for(var i=0;i<raw.length;i++) u[i]=raw.charCodeAt(i);
+    var u=await new Promise(function(res){ window.addEventListener("message",function h(e){
+      if(e.data&&e.data.mopoPdf){ window.removeEventListener("message",h); res(new Uint8Array(e.data.mopoPdf)); } });
+      parent.postMessage({mopo:"pdfready"},"*"); });
     var pdf=await pdfjsLib.getDocument({data:u}).promise, cur=1, busy=false, st=document.getElementById("st");
     async function show(n){
       if(busy||n<1||n>pdf.numPages) return; busy=true; cur=n;
@@ -884,8 +886,9 @@ function pdfPage(b64) {
 }
 /* документ и таблица: страницы PDF одна под другой, прокрутка колесом, масштаб − / +,
    оглавление и ссылки внутри документа кликабельны, текст выделяется и копируется */
-function pdfScroll(b64, toc) {
+function pdfScroll(toc) {
   const TOCJ = JSON.stringify(toc || []).replace(/</g, "\\u003c");
+  const COLJ = JSON.stringify(MARKERS.map(m => m && m.c));
   return `<!doctype html><html><head><meta charset="utf-8"><style>
   html,body{margin:0;height:100%;background:#E9E8E5;font:13px Arial,sans-serif}
   #sc{position:absolute;inset:0 0 44px 0;overflow:auto} body.side #sc{left:280px}
@@ -899,10 +902,16 @@ function pdfScroll(b64, toc) {
   .textLayer span,.textLayer br{color:transparent;position:absolute;white-space:pre;cursor:text;transform-origin:0 0}
   .textLayer ::selection{background:rgba(230,96,35,.35)}
   .lk{position:absolute;z-index:2;cursor:pointer} .lk:hover{background:rgba(230,96,35,.12)}
+  .mk{position:absolute;z-index:0;border-radius:3px;opacity:.55;pointer-events:none}
+  #selbar{position:fixed;z-index:9;display:none;gap:6px;align-items:center;background:#232227;color:#fff;border-radius:999px;padding:6px 8px;box-shadow:0 8px 20px rgba(0,0,0,.25)}
+  #selbar.on{display:flex}
+  #selbar button{background:rgba(255,255,255,.14);border:0;color:#fff;border-radius:999px;padding:5px 10px;font:600 12px Arial;cursor:pointer}
+  #selbar .dot{width:18px;height:18px;border-radius:50%;padding:0;border:2px solid rgba(255,255,255,.5)}
   #bar{position:absolute;left:0;right:0;bottom:0;height:44px;display:flex;align-items:center;justify-content:center;gap:10px;background:#232227;color:#fff}
   #bar button{background:rgba(255,255,255,.14);border:0;color:#fff;border-radius:999px;padding:6px 14px;font:600 13px Arial;cursor:pointer}
   #zv{min-width:46px;text-align:center} #num{opacity:.75;margin-left:10px}
   #msg{padding:40px;text-align:center;color:#232227;font-size:15px}</style></head><body>
+  <div id="selbar"></div>
   <div id="side"><h4>Оглавление</h4><div id="toc"></div></div><div id="sc"><div id="pages"><div id="msg">Загружаем…</div></div></div>
   <div id="bar"><button id="tg" style="display:none">☰ Оглавление</button><button id="zm">−</button><span id="zv">100%</span><button id="zp">+</button><button id="zf">По ширине</button><span id="num"></span></div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -910,7 +919,9 @@ function pdfScroll(b64, toc) {
     var W="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
     try{ var wt=await (await fetch(W)).text(); pdfjsLib.GlobalWorkerOptions.workerSrc=URL.createObjectURL(new Blob([wt],{type:"text/javascript"})); }
     catch(e){ pdfjsLib.GlobalWorkerOptions.workerSrc=W; }
-    var raw=atob("${b64}"), u=new Uint8Array(raw.length); for(var i=0;i<raw.length;i++) u[i]=raw.charCodeAt(i);
+    var u=await new Promise(function(res){ window.addEventListener("message",function h(e){
+      if(e.data&&e.data.mopoPdf){ window.removeEventListener("message",h); res(new Uint8Array(e.data.mopoPdf)); } });
+      parent.postMessage({mopo:"pdfready"},"*"); });
     var pdf=await pdfjsLib.getDocument({data:u}).promise, sc=document.getElementById("sc"), wrap=document.getElementById("pages");
     var pages=[], z=1, fit=1, gen=0, TOC=${TOCJ}, marks=[];
     var SKIP=/^(содержание|оглавление|contents|tableofcontents)\d*$/;
@@ -938,6 +949,7 @@ function pdfScroll(b64, toc) {
         d.onclick=function(){ if(!a.url) return go(a.dest);
           if(/(docs\.google\.com|drive\.google\.com)/.test(a.url)) parent.postMessage({mopo:"opendoc",url:a.url},"*");
           else window.open(a.url,"_blank","noopener"); }; box.appendChild(d); }); }catch(e){}
+      paintMarks(x);
     }
     async function go(dest){
       try{ if(typeof dest==="string") dest=await pdf.getDestination(dest); var i=await pdf.getPageIndex(dest[0]), x=pages[i];
@@ -967,6 +979,74 @@ function pdfScroll(b64, toc) {
     sc.addEventListener("touchstart",function(e){ if(e.touches.length===2){ d0=dist(e.touches); z0=z; } },{passive:true});
     sc.addEventListener("touchmove",function(e){ if(e.touches.length===2&&d0){ e.preventDefault(); setZ(z0*dist(e.touches)/d0); } },{passive:false});
     var rt; window.addEventListener("resize",function(){ clearTimeout(rt); rt=setTimeout(function(){ fit=fitScale(); layout(); },200); });
+    /* выделение мышью: «Заметка» отправляет цитату в панель кабинета, кружок — цветной маркер поверх PDF */
+    var COLORS=${COLJ}, MARKS=[], bar=document.getElementById("selbar");
+    bar.innerHTML='<button type="button" data-q="1">Заметка</button>' +
+      COLORS.map(function(c,i){ return c?'<button type="button" class="dot" data-c="'+i+'" style="background:'+c+'" title="Маркер"></button>':""; }).join("");
+    function selText(){ var s=window.getSelection(); return s&&!s.isCollapsed?String(s).replace(/\s+/g," ").trim():""; }
+    function hideBar(){ bar.classList.remove("on"); }
+    document.addEventListener("mouseup",function(){ setTimeout(function(){
+      var t=selText(); if(t.length<2){ hideBar(); return; }
+      var r=window.getSelection().getRangeAt(0).getBoundingClientRect();
+      bar.style.left=Math.max(8,Math.min(window.innerWidth-260,r.left))+"px";
+      bar.style.top=Math.max(8,r.top-44)+"px"; bar.classList.add("on");
+    },10); });
+    sc.addEventListener("scroll",hideBar);
+    bar.addEventListener("click",function(e){
+      var b=e.target.closest("button"); if(!b) return;
+      var t=selText(); if(!t) return hideBar();
+      if(b.dataset.q) parent.postMessage({mopo:"quote",text:t},"*");
+      else parent.postMessage({mopo:"hl",text:t,color:+b.dataset.c},"*");
+      hideBar(); try{ window.getSelection().removeAllRanges(); }catch(e2){}
+    });
+    /* подсветка сохранённых выделений: ищем фразу в тексте страницы и кладём цветные прямоугольники под текст */
+    function nz(t){ return String(t||"").toLowerCase().replace(/ё/g,"е").replace(/\s+/g," "); }
+    function paintMarks(x){
+      if(!x.box) return;
+      [].slice.call(x.box.querySelectorAll(".mk")).forEach(function(n){ n.remove(); });
+      var tl=x.box.querySelector(".textLayer"); if(!tl||!MARKS.length) return;
+      var map=[], S="";
+      [].slice.call(tl.childNodes).forEach(function(node){
+        var tx=node.textContent||"";
+        for(var i=0;i<tx.length;i++){ S+=tx[i]; map.push({n:node.firstChild||node,o:i}); }
+        S+=" "; map.push(null);
+      });
+      var Sn=nz(S), bx=x.box.getBoundingClientRect();
+      MARKS.forEach(function(m){
+        var q=nz(m.text); if(q.length<3) return;
+        var at=Sn.indexOf(q);
+        while(at>=0){
+          var a=map[at], b=map[at+q.length-1];
+          if(a&&b){
+            try{
+              var rg=document.createRange(); rg.setStart(a.n,a.o); rg.setEnd(b.n,b.o+1);
+              [].slice.call(rg.getClientRects()).forEach(function(r){
+                var d=document.createElement("div"); d.className="mk";
+                d.style.background=COLORS[m.color||1]||COLORS[1];
+                d.style.left=(r.left-bx.left)+"px"; d.style.top=(r.top-bx.top)+"px";
+                d.style.width=r.width+"px"; d.style.height=r.height+"px"; x.box.appendChild(d);
+              });
+            }catch(e){}
+          }
+          at=Sn.indexOf(q,at+q.length);
+        }
+      });
+    }
+    function paintAll(){ pages.forEach(function(x){ if(x.box&&x.box.querySelector(".textLayer")) paintMarks(x); }); }
+    window.addEventListener("message",function(e){
+      var d=e.data||{};
+      if(d.mopo==="reset"){ MARKS=d.list||[]; paintAll(); }
+      if(d.mopo==="focus"&&d.text){
+        var q=nz(d.text);
+        (async function(){
+          for(var i=0;i<pages.length;i++){
+            var t=nz((await pages[i].p.getTextContent()).items.map(function(z){return z.str;}).join(" "));
+            if(t.indexOf(q)>=0){ sc.scrollTop=pages[i].box.offsetTop-10; await draw(i,gen); paintMarks(pages[i]); break; }
+          }
+        })();
+      }
+    });
+    parent.postMessage({mopo:"ready"},"*");
     /* оглавление слева, как в Google Документах: заголовки ищем в тексте страниц */
     var norm=function(t){ return String(t||"").toLowerCase().replace(/ё/g,"е").replace(/[^a-zа-я0-9]+/g,""); };
     async function buildToc(){
@@ -1006,12 +1086,38 @@ function renderDoc(frame, r) {
     const note = `<div style="font:12px/1.4 Arial;background:#FFF3D6;color:#8A5A00;padding:8px 12px;border-bottom:1px solid #F2D9A6">Упрощённый вид таблицы: оформление Google получить не удалось${r.why ? " (" + esc(r.why) + ")" : ""}.</div>`;
     html = /<body[^>]*>/i.test(html) ? html.replace(/<body[^>]*>/i, m => m + note) : note + html;
   }
-  frame.srcdoc = r.kind === "html" ? docInject(html, !!r.sheet) : watermark(r.doc ? pdfScroll(r.pdf, r.toc) : pdfPage(r.pdf));
+  if (r.kind === "html") { frame.srcdoc = docInject(html, !!r.sheet); return; }
+  let bytes;
+  try { bytes = b64bytes(r.pdf); }
+  catch (e) {
+    const info = "тип: " + esc(String(r.kind)) + ", документ: " + (r.doc ? "да" : "нет") +
+      ", файл: " + esc(typeof r.pdf) + ", длина: " + (r.pdf ? String(r.pdf).length : 0) +
+      ", начало: " + esc(String(r.pdf || "").slice(0, 30));
+    frame.srcdoc = docPage("Не удалось показать файл: сервер прислал его повреждённым (" + esc(e.message) + ").<br><br>" +
+      "Закройте материал и откройте ещё раз. Если повторится — покажите эту строку:<br><small>" + info + "</small>");
+    return;
+  }
+  /* сам файл в страницу не зашиваем — окно просит его и получает сообщением: так быстрее и не ломается на больших документах */
+  const give = e => {
+    if (e.source !== frame.contentWindow || !e.data || e.data.mopo !== "pdfready") return;
+    window.removeEventListener("message", give);
+    const copy = bytes.slice().buffer;
+    frame.contentWindow.postMessage({ mopoPdf: copy }, "*", [copy]);
+  };
+  window.addEventListener("message", give);
+  frame.srcdoc = watermark(r.doc ? pdfScroll(r.toc) : pdfPage());
+}
+function b64bytes(b64) {
+  const clean = String(b64 || "").replace(/[^A-Za-z0-9+/=]/g, "");
+  if (!clean) throw new Error("пустой файл");
+  const bin = atob(clean), u = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+  return u;
 }
 async function loadDoc(frame, l) {
   const cached = await docCacheGet(l.id);
   if (cached) renderDoc(frame, cached);
-  else frame.srcdoc = docPage("Загружаем документ… В первый раз это несколько секунд, дальше он откроется сразу.");
+  else frame.srcdoc = docPage("Загружаем документ… В первый раз это может занять пару минут — Google готовит копию. Дальше документ будет открываться сразу.");
   try {
     const r = await api("doc.get", { lessonId: l.id, have: cached ? cached.mt : "" });
     if (r.same) return;
@@ -1081,7 +1187,7 @@ function openLesson(l, at, quote) {
   const v = el("div", "viewer split");
   const gk = APP.demo ? "" : gdocKind(l), proxied = !!gk;                 /* документ Google — копией через сервер */
   const video = l.kind === "видео", inner = isInternal(l.url), framed = inner || proxied;
-  const textual = /^konspekt\//.test(String(l.url));            /* маркер и цитаты — только в конспектах */
+  const textual = /^konspekt\//.test(String(l.url)) || gk === "doc";   /* маркер и цитаты: конспекты и документы Google */
   const slides = /docs\.google\.com\/presentation\//.test(String(l.url));
   const src = inner ? l.url : driveEmbed(l.url);
   let tab = quote && notesOf(l.id).some(n => isHl(n) && n.quote === quote) ? "hl" : "note";
@@ -1105,9 +1211,9 @@ function openLesson(l, at, quote) {
               <button type="button" class="link" data-a="tcreset">сброс</button>
             </div>
             <p class="hint tiny">Счётчик идёт по вашим кликам по видео: Google Диск не сообщает, на какой минуте плеер. Пока видео грузится и после перемотки время может разойтись — поправьте его в поле вручную.</p>` : ""}
-          ${textual ? '<p class="hint tiny">Выделите фразу в конспекте: цветной маркер — в «Выделения», кнопка «Заметка» — сюда.</p>' : ""}
+          ${textual ? '<p class="hint tiny">Выделите фразу: цветной маркер — в «Выделения», кнопка «Заметка» — сюда.</p>' : ""}
           ${gk === "html" ? '<p class="hint tiny">Таблица показана вкладками, как в Google: листы сверху, масштаб − / + или щипок на трекпаде. Нужное выделите и скопируйте в заметку.</p>'
-            : gk === "doc" ? '<p class="hint tiny">Документ показан 1 в 1, как в Google. Прокрутка колесом, масштаб − / + внизу или щипком, пункты оглавления кликабельны. Нужный текст выделите и скопируйте в заметку.</p>'
+            : gk === "doc" ? '<p class="hint tiny">Документ показан 1 в 1, как в Google: прокрутка колесом, масштаб − / + внизу или щипком, оглавление слева. Выделите фразу — цветной маркер или кнопка «Заметка».</p>'
             : gk === "pdf" ? '<p class="hint tiny">Листайте кликом по левому или правому краю, кнопками внизу или стрелками ← →. Текст на слайде можно выделить и скопировать в заметку.</p>'
             : slides ? '<p class="hint tiny">Текст со слайдов скопировать нельзя — Google показывает их картинками. Листайте стрелками ← → на клавиатуре или под слайдом.</p>'
             : !textual && !video ? '<p class="hint tiny">Маркер и цитаты по выделению работают только в конспектах. Здесь нужную фразу скопируйте (⌘C) и вставьте в заметку.</p>' : ""}
