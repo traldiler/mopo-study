@@ -1040,8 +1040,9 @@ function pdfScroll(toc, tabs, note) {
     function num(){ var m=sc.scrollTop+sc.clientHeight/3, k=1; pages.forEach(function(x,i){ if(x.box&&x.box.offsetTop<=m) k=i+1; });
       document.getElementById("num").textContent="стр. "+k+" / "+pages.length; }
     sc.addEventListener("scroll",num);
-    document.getElementById("zm").onclick=function(){ z=Math.max(.5,Math.round((z-.1)*10)/10); layout(); };
-    document.getElementById("zp").onclick=function(){ z=Math.min(3,Math.round((z+.1)*10)/10); layout(); };
+    var maxZ=function(){ return (htmlbox && htmlbox.style.display==="block") ? 6 : 3; };   /* собранный лист можно увеличить сильнее */
+    document.getElementById("zm").onclick=function(){ z=Math.max(.3,Math.round((z-.1)*10)/10); layout(); };
+    document.getElementById("zp").onclick=function(){ z=Math.min(maxZ(),Math.round((z+.1)*10)/10); layout(); };
     document.getElementById("zf").onclick=function(){
       if(htmlbox && htmlbox.style.display==="block"){     /* «по ширине» для собранного листа */
         var t=htmlbox.querySelector("table");
@@ -1051,10 +1052,10 @@ function pdfScroll(toc, tabs, note) {
       z=1; fit=fitScale(); layout();
     };
     /* масштаб щипком: тачпад (ctrl+колесо и жесты Safari) и два пальца на телефоне */
-    function setZ(nz){ z=Math.min(3,Math.max(.4,Math.round(nz*100)/100)); layout(); }
+    function setZ(nz){ z=Math.min(maxZ(),Math.max(.3,Math.round(nz*100)/100)); layout(); }
     sc.addEventListener("wheel",function(e){ if(!e.ctrlKey&&!e.metaKey) return; e.preventDefault(); setZ(z*(e.deltaY>0?.93:1.07)); },{passive:false});
     var g0=1; document.addEventListener("gesturestart",function(e){ e.preventDefault(); g0=z; });
-    document.addEventListener("gesturechange",function(e){ e.preventDefault(); setZ(g0*e.scale); });
+    document.addEventListener("gesturechange",function(e){ e.preventDefault(); setZ(g0*e.scale); });   /* щипок работает и на собранном листе */
     document.addEventListener("gestureend",function(e){ e.preventDefault(); });
     var d0=0,z0=1, dist=function(t){ var dx=t[0].clientX-t[1].clientX, dy=t[0].clientY-t[1].clientY; return Math.sqrt(dx*dx+dy*dy); };
     sc.addEventListener("touchstart",function(e){ if(e.touches.length===2){ d0=dist(e.touches); z0=z; } },{passive:true});
