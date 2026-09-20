@@ -905,13 +905,23 @@ function pdfPage() {
 }
 /* документ и таблица: страницы PDF одна под другой, прокрутка колесом, масштаб − / +,
    оглавление и ссылки внутри документа кликабельны, текст выделяется и копируется */
-function pdfScroll(toc) {
+function pdfScroll(toc, tabs, note) {
   const TOCJ = JSON.stringify(toc || []).replace(/</g, "\\u003c");
   const COLJ = JSON.stringify(MARKERS.map(m => m && m.c));
+  const list = (tabs || []).map(t => (typeof t === "string" ? { name: t } : t));
+  const TABSJ = JSON.stringify(list).replace(/</g, "\\u003c");
+  const topBar = list.length ? `<div id="top"><div id="tabs">` +
+    list.map((t, i) => `<button type="button" data-t="${i}"${i ? "" : ' class="on"'}>${esc(t.name)}</button>`).join("") +
+    `</div>${note ? `<div id="note">${esc(note)}</div>` : ""}</div>` : "";
   return `<!doctype html><html><head><meta charset="utf-8"><style>
   html,body{margin:0;height:100%;background:#E9E8E5;font:13px Arial,sans-serif}
-  #sc{position:absolute;inset:0 0 44px 0;overflow:auto} body.side #sc{left:280px}
-  #side{position:absolute;left:0;top:0;bottom:44px;width:280px;overflow:auto;background:#fff;border-right:1px solid #E0DED9;box-sizing:border-box;padding:14px 10px 30px;display:none}
+  #sc{position:absolute;left:0;right:0;top:var(--top,0px);bottom:44px;overflow:auto} body.side #sc{left:280px}
+  #top{position:absolute;left:0;right:0;top:0;z-index:6;background:#F7F6F4;border-bottom:1px solid #E5E3DF}
+  #tabs{display:flex;flex-wrap:wrap;gap:6px;padding:8px 12px}
+  #tabs button{border:1px solid #E5E3DF;background:#fff;border-radius:999px;padding:5px 12px;font:12px Arial;cursor:pointer;color:#232227}
+  #tabs button.on{background:#232227;color:#fff;border-color:#232227}
+  #note{padding:5px 12px;background:#FDF6F1;border-top:1px solid #F0DFD3;color:#8A5A00;font-size:12px}
+  #side{position:absolute;left:0;top:var(--top,0px);bottom:44px;width:280px;overflow:auto;background:#fff;border-right:1px solid #E0DED9;box-sizing:border-box;padding:14px 10px 30px;display:none}
   body.side #side{display:block} #side h4{margin:2px 8px 10px;font:700 12px Arial;letter-spacing:.04em;text-transform:uppercase;color:#6D6B72}
   #side a{display:block;padding:6px 8px;border-radius:8px;color:#232227;text-decoration:none;font-size:13px;line-height:1.3;cursor:pointer}
   #side a:hover{background:#F2F1EF} #side a.on{background:#ECEBE8;color:#232227;font-weight:600} #side a.nf{color:#9B99A0}
@@ -930,7 +940,7 @@ function pdfScroll(toc) {
   #bar button{background:rgba(255,255,255,.14);border:0;color:#fff;border-radius:999px;padding:6px 14px;font:600 13px Arial;cursor:pointer}
   #zv{min-width:46px;text-align:center} #num{opacity:.75;margin-left:10px}
   #msg{padding:40px;text-align:center;color:#232227;font-size:15px}</style></head><body>
-  <div id="selbar"></div>
+  <div id="selbar"></div>${topBar}
   <div id="side"><h4>Оглавление</h4><div id="toc"></div></div><div id="sc"><div id="pages"><div id="msg">Загружаем…</div></div></div>
   <div id="bar"><button id="tg" style="display:none">☰ Оглавление</button><button id="zm">−</button><span id="zv">100%</span><button id="zp">+</button><button id="zf">По ширине</button><span id="num"></span></div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -938,17 +948,26 @@ function pdfScroll(toc) {
     var W="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
     try{ var wt=await (await fetch(W)).text(); pdfjsLib.GlobalWorkerOptions.workerSrc=URL.createObjectURL(new Blob([wt],{type:"text/javascript"})); }
     catch(e){ pdfjsLib.GlobalWorkerOptions.workerSrc=W; }
-    var u=await new Promise(function(res){ window.addEventListener("message",function h(e){
-      if(e.data&&e.data.mopoPdf){ window.removeEventListener("message",h); res(new Uint8Array(e.data.mopoPdf)); } });
-      parent.postMessage({mopo:"pdfready"},"*"); });
-    var pdf=await pdfjsLib.getDocument({data:u}).promise, sc=document.getElementById("sc"), wrap=document.getElementById("pages");
-    var pages=[], z=1, fit=1, gen=0, TOC=${TOCJ}, marks=[];
+    var sc=document.getElementById("sc"), wrap=document.getElementById("pages");
+    var pdf=null, pages=[], z=1, fit=1, gen=0, TOC=${TOCJ}, TABS=${TABSJ}, marks=[], curTab=0, busyTab=false;
     var SKIP=/^(содержание|оглавление|contents|tableofcontents)\d*$/;
-    for(var n=1;n<=pdf.numPages;n++){
-      var p=await pdf.getPage(n);
-      var txt=(await p.getTextContent()).items.map(function(x){return x.str;}).join("").toLowerCase().replace(/[^a-zа-яё0-9]+/g,"");
-      if(SKIP.test(txt)) continue;                      /* страница-оглавление в PDF пустая: слева есть своё */
-      pages.push({p:p,v:p.getViewport({scale:1})});
+    var top=document.getElementById("top");
+    function fixTop(){ document.documentElement.style.setProperty("--top",(top?top.offsetHeight:0)+"px"); }
+    fixTop(); window.addEventListener("resize",fixTop);
+    function wait(text){ wrap.innerHTML='<div id="msg">'+text+'</div>'; }
+    /* один документ или один лист таблицы: страницы строим заново */
+    async function boot(u){
+      pdf=await pdfjsLib.getDocument({data:u}).promise;
+      pages=[]; marks=marks||[];
+      for(var n=1;n<=pdf.numPages;n++){
+        var p=await pdf.getPage(n);
+        var txt=(await p.getTextContent()).items.map(function(x){return x.str;}).join("").toLowerCase().replace(/[^a-zа-яё0-9]+/g,"");
+        if(SKIP.test(txt)) continue;                    /* страница-оглавление в PDF пустая: слева есть своё */
+        pages.push({p:p,v:p.getViewport({scale:1})});
+      }
+      fit=fitScale(); layout(); num();
+      if(TOC.length) buildToc();
+      busyTab=false;
     }
     function fitScale(){ var w=0; pages.forEach(function(x){ w=Math.max(w,x.v.width); }); return Math.min(1.6,(sc.clientWidth-32)/w); }
     async function draw(i,g){
@@ -1094,112 +1113,57 @@ function pdfScroll(toc) {
         if(x.box.offsetTop+vp.convertToViewportPoint(0,k.m.y+k.m.h)[1]<=top) on=k; });
       marks.forEach(function(k){ k.a.classList.toggle("on",k===on); }); }
     sc.addEventListener("scroll",cur);
-    fit=fitScale(); layout(); num(); buildToc();
     /* окно ещё не получило размер (документ открыли в спрятанной вкладке) — пересчитаем, как только появится */
-    try{ var ro=new ResizeObserver(function(){ if(sc.clientWidth&&Math.abs(fit-fitScale())>0.01){ fit=fitScale(); layout(); } }); ro.observe(sc); }catch(e){}
-  })().catch(function(e){ document.getElementById("pages").innerHTML='<div id="msg">Не удалось показать файл: '+e.message+'</div>'; });<\/script></body></html>`;
-}
-/* таблица: вкладки листов рисует кабинет, сам лист приходит отдельным запросом — большие таблицы иначе не успевают собраться */
-function sheetShell(names, selfId) {
-  const list = (names || []).map(n => (typeof n === "string" ? { name: n, gid: "" } : n));
-  const NAMESJ = JSON.stringify(list).replace(/</g, "\\u003c");
-  const SELFJ = JSON.stringify(String(selfId || ""));
-  const tabs = list.map((n, i) => `<button type="button" data-i="${i}"${i ? "" : ' class="on"'}>${esc(n.name)}</button>`).join("");
-  return `<!doctype html><html><head><meta charset="utf-8"><style>
-  html,body{margin:0;height:100%;background:#fff;font:13px Arial,sans-serif;color:#232227}
-  body{display:flex;flex-direction:column}
-  #bar{flex:0 0 auto;display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px 12px;background:#F7F6F4;border-bottom:1px solid #E5E3DF}
-  #bar button{border:1px solid #E5E3DF;background:#fff;border-radius:999px;padding:5px 12px;font:12px Arial;cursor:pointer;color:#232227}
-  #bar button.on{background:#232227;color:#fff;border-color:#232227}
-  #bar .z{margin-left:auto;display:flex;gap:6px;align-items:center;font:12px Arial;color:#6D6B72}
-  #wrap{flex:1 1 auto;overflow:auto;padding:12px;min-height:0}#inner{transform-origin:0 0}
-  table{border-collapse:collapse;table-layout:fixed;width:max-content}
-  td{border:1px solid #E1DFDB;padding:4px 6px;vertical-align:top;font-size:12px;line-height:1.35;overflow-wrap:anywhere}
-  .cut{color:#6D6B72;font-size:12px;margin:10px 2px}
-  td a{color:#C84E17} td img{max-width:100%;height:auto;display:block;margin:0 auto 2px}
-  #note{flex:0 0 auto;padding:6px 12px;background:#FDF6F1;border-bottom:1px solid #F0DFD3;color:#8A5A00;font-size:12px}
-  .wait{padding:40px 24px;color:#6D6B72;display:flex;gap:12px;align-items:center;font-size:14px}
-  .sp{width:20px;height:20px;border:3px solid #E5E3DF;border-top-color:#E66023;border-radius:50%;animation:sp 1s linear infinite;flex:0 0 auto}
-  @keyframes sp{to{transform:rotate(360deg)}}</style></head><body>
-  <div id="bar">${tabs || "<b>Лист</b>"}<span class="z"><button type="button" id="zm">−</button><span id="zv">100%</span>
-    <button type="button" id="zp">+</button><button type="button" id="zf">По ширине</button></span></div>
-  <div id="note">Это сохранённая копия таблицы: фильтры, сортировка и другие возможности Google Таблиц здесь не работают.
-    После обучения у вас будет доступ к самим документам.</div>
-  <div id="wrap"><div id="inner"><div class="wait"><span class="sp"></span><span>Загружаем лист…</span></div></div></div>
-  <script>(function(){
-    var NAMES=${NAMESJ}, SELF=${SELFJ};
-    var z=1, wrap=document.getElementById("wrap"), inner=document.getElementById("inner"), cache={}, cur=0, names=NAMES;
-    function set(){ inner.style.transform="scale("+z+")"; inner.style.width=(100/z)+"%"; document.getElementById("zv").textContent=Math.round(z*100)+"%"; }
-    function step(d){ z=Math.min(2.5,Math.max(.25,Math.round((z+d)*20)/20)); set(); }
-    function fit(){ var t=inner.querySelector("table"); if(!t) return; z=Math.min(1,Math.max(.4,(wrap.clientWidth-26)/t.scrollWidth)); set(); }
-    document.getElementById("zm").onclick=function(){step(-.1)};
-    document.getElementById("zp").onclick=function(){step(.1)};
-    document.getElementById("zf").onclick=fit;
-    wrap.addEventListener("wheel",function(e){ if(!e.ctrlKey&&!e.metaKey) return; e.preventDefault(); step(e.deltaY>0?-.05:.05); },{passive:false});
-    var g0=1; document.addEventListener("gesturestart",function(e){e.preventDefault();g0=z;});
-    document.addEventListener("gesturechange",function(e){e.preventDefault();z=Math.min(2.5,Math.max(.25,g0*e.scale));set();});
-    document.addEventListener("gestureend",function(e){e.preventDefault();});
-    var d0=0,z0=1,dist=function(t){var dx=t[0].clientX-t[1].clientX,dy=t[0].clientY-t[1].clientY;return Math.sqrt(dx*dx+dy*dy);};
-    wrap.addEventListener("touchstart",function(e){ if(e.touches.length===2){ d0=dist(e.touches); z0=z; } },{passive:true});
-    wrap.addEventListener("touchmove",function(e){ if(e.touches.length===2&&d0){ e.preventDefault(); z=Math.min(2.5,Math.max(.25,z0*dist(e.touches)/d0)); set(); } },{passive:false});
-    function show(i){
-      cur=i;
-      [].slice.call(document.querySelectorAll("#bar [data-i]")).forEach(function(b){ b.classList.toggle("on",+b.dataset.i===i); });
-      if(cache[i]!==undefined){ inner.innerHTML=cache[i]||'<div class="wait"><span>Лист пустой.</span></div>'; wrap.scrollTop=0; wrap.scrollLeft=0; fit(); return; }
-      inner.innerHTML='<div class="wait"><span class="sp"></span><span>Загружаем лист «'+((names[i]||{}).name||"")+'»… в первый раз это может занять до минуты</span></div>';
+    try{ var ro=new ResizeObserver(function(){ if(sc.clientWidth&&pages.length&&Math.abs(fit-fitScale())>0.01){ fit=fitScale(); layout(); } }); ro.observe(sc); }catch(e){}
+    /* файл приходит от кабинета: документ — сразу, лист таблицы — по клику на вкладке */
+    window.addEventListener("message",function(e){
+      var d=e.data||{};
+      if(d.mopoPdf){ if(d.i!=null&&d.i!==curTab) return; boot(new Uint8Array(d.mopoPdf)); }
+      if(d.mopoErr&&(d.i==null||d.i===curTab)){ busyTab=false; wait("Не удалось открыть: "+d.mopoErr+"<br><br>Нажмите вкладку ещё раз."); }
+    });
+    function askTab(i){
+      curTab=i; busyTab=true;
+      [].slice.call(document.querySelectorAll("#tabs [data-t]")).forEach(function(b){ b.classList.toggle("on",+b.dataset.t===i); });
+      wait("Загружаем «"+((TABS[i]||{}).name||"лист")+"»… первое открытие может занять пару минут");
       parent.postMessage({mopo:"needsheet",i:i},"*");
     }
-    window.addEventListener("message",function(e){
-      var d=e.data&&e.data.mopoSheet; if(!d) return;
-      var html=d.error?'<div class="wait"><span>Не удалось открыть лист: '+d.error+'. Нажмите вкладку ещё раз.</span></div>'
-        :(d.html||'<div class="wait"><span>Лист пустой.</span></div>');
-      if(!d.error) cache[d.i]=html;                  /* ошибку не запоминаем: по клику попробуем снова */
-      if(d.i===cur){ inner.innerHTML=html; wrap.scrollTop=0; wrap.scrollLeft=0; fit(); }
-    });
-    [].slice.call(document.querySelectorAll("#bar [data-i]")).forEach(function(b){ b.onclick=function(){ show(+b.dataset.i); }; });
-    /* ссылка в ячейке: документ Google открываем в кабинете, остальное — новой вкладкой */
-    document.addEventListener("click",function(e){
-      var a=e.target.closest&&e.target.closest("a[href]"); if(!a) return;
-      var h=a.getAttribute("href")||""; if(!/^https?:/i.test(h)) return;
-      e.preventDefault();
-      /* ссылка на другую вкладку этой же таблицы («навигация по каталогу») — просто переключаем вкладку */
-      if(SELF && h.indexOf(SELF)>=0){
-        var g=(h.match(/[#&?]gid=(\\d+)/)||[])[1];
-        var k=g?names.findIndex(function(x){ return String(x.gid)===String(g); }):-1;
-        if(k>=0){ show(k); wrap.scrollTop=0; return; }
-        if(!g) return;                                      /* ссылка на саму таблицу — никуда не уходим */
-      }
-      if(/(docs\\.google\\.com|drive\\.google\\.com)/.test(h)) parent.postMessage({mopo:"opendoc",url:h},"*");
-      else window.open(h,"_blank","noopener");
-    },true);
-    window.addEventListener("resize",function(){ setTimeout(fit,100); });
-    set(); show(0);
-  })();<\/script></body></html>`;
+    [].slice.call(document.querySelectorAll("#tabs [data-t]")).forEach(function(b){ b.onclick=function(){ if(!busyTab||+b.dataset.t!==curTab) askTab(+b.dataset.t); }; });
+    if(TABS.length) askTab(0); else { wait("Готовим документ…"); parent.postMessage({mopo:"pdfready"},"*"); }
+  })().catch(function(e){ document.getElementById("pages").innerHTML='<div id="msg">Не удалось показать файл: '+e.message+'</div>'; });<\/script></body></html>`;
 }
+const SHEET_NOTE = "Это сохранённая копия таблицы: фильтры, сортировка и другие возможности Google Таблиц здесь не работают. " +
+  "После обучения у вас будет доступ к самим документам.";
 function renderDoc(frame, r, ref) {
   if (r.kind === "sheet") {
-    const mt = r.mt || "";
-    const want = async i => {
-      const ck = "sh:" + JSON.stringify(ref || {}) + ":" + mt + ":" + i;
-      let c = await docCacheGet(ck);
-      if (!c) { c = await api("doc.sheet", Object.assign({ i: i }, ref || {})); await docCachePut(ck, c); }
-      return c.html;
-    };
+    /* таблица: каждый лист Google печатает сам, кабинет показывает его страницами и переключает вкладки */
+    const names = (r.sheets || []).map(x => (typeof x === "string" ? { name: x } : x));
     const give = async e => {
       if (e.source !== frame.contentWindow || !e.data || e.data.mopo !== "needsheet") return;
-      try { frame.contentWindow.postMessage({ mopoSheet: { i: e.data.i, html: await want(e.data.i) } }, "*"); }
-      catch (err) { try { frame.contentWindow.postMessage({ mopoSheet: { i: e.data.i, error: String(err.message || err) } }, "*"); } catch (e2) { } }
+      const i = e.data.i;
+      const send = (msg, transfer) => { try { frame.contentWindow.postMessage(msg, "*", transfer || []); } catch (e2) { } };
+      try {
+        const ck = "sh:" + JSON.stringify(ref || {}) + ":" + (r.mt || "") + ":" + i;
+        let c = await docCacheGet(ck);
+        if (!c) { c = await api("doc.sheet", Object.assign({ i: i }, ref || {})); await docCachePut(ck, c); }
+        const buf = b64bytes(c.pdf).buffer;
+        send({ mopoPdf: buf, i: i }, [buf]);
+      } catch (err) { send({ mopoErr: String(err.message || err), i: i }); }
     };
     window.addEventListener("message", give);
-    frame.srcdoc = watermark(sheetShell(r.sheets || [], r.id));
+    frame.srcdoc = watermark(pdfScroll([], names, SHEET_NOTE));
     return;
   }
   let html = r.html || "";
-  if (r.kind === "html" && r.simple) {                  /* выгрузку «как у Google» получить не удалось — честно показываем упрощённый вид и причину */
-    const note = `<div style="font:12px/1.4 Arial;background:#FFF3D6;color:#8A5A00;padding:8px 12px;border-bottom:1px solid #F2D9A6">Упрощённый вид таблицы: оформление Google получить не удалось${r.why ? " (" + esc(r.why) + ")" : ""}.</div>`;
+  if (r.kind === "html" && r.simple) {
+    const note = `<div style="font:12px/1.4 Arial;background:#FFF3D6;color:#8A5A00;padding:8px 12px;border-bottom:1px solid #F2D9A6">Упрощённый вид таблицы.</div>`;
     html = /<body[^>]*>/i.test(html) ? html.replace(/<body[^>]*>/i, m => m + note) : note + html;
   }
   if (r.kind === "html") { frame.srcdoc = docInject(html, !!r.sheet); return; }
+  if (r && r.service) {
+    frame.srcdoc = docPage("Google не успел подготовить этот файл и вернул служебный ответ.<br><br>" +
+      "Закройте материал и откройте ещё раз — со второго раза обычно открывается.");
+    return;
+  }
   let bytes;
   try { bytes = b64bytes(r.pdf); }
   catch (e) {

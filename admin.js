@@ -889,7 +889,8 @@ async function drvStatus() {
     do {
       const part = await api("admin.driveStatus", { from: from, count: 20 });
       if (!part || !Array.isArray(part.files)) { r = part; break; }
-      r = r ? { account: part.account, total: part.total, files: r.files.concat(part.files) } : { account: part.account, total: part.total, files: part.files };
+      r = r ? { account: part.account, total: part.total, driveApi: part.driveApi, files: r.files.concat(part.files) }
+            : { account: part.account, total: part.total, driveApi: part.driveApi, files: part.files };
       btn.textContent = "Проверяем… " + r.files.length + " из " + (part.total || "?");
       box.innerHTML = `<p class="hint">Проверено ${r.files.length} из ${part.total || "?"} — файлов много, это занимает до минуты.</p>`;
       from = part.next || 0;
@@ -905,7 +906,8 @@ async function drvStatus() {
   const open = vids.filter(f => f.ok && f.access === "ANYONE_WITH_LINK").length;
   const dev = APP.user.role === "dev";
   box.innerHTML = `<div class="drv">
-    <p>Кабинет работает от почты <b class="inl">${esc(r.account || "—")}</b>. Проверено файлов: ${r.files.length}.</p>
+    <p>Кабинет работает от почты <b class="inl">${esc(r.account || "—")}</b>. Проверено файлов: ${r.files.length} — это материалы программы
+      и документы, на которые они ссылаются изнутри (их сервис тоже открывает сотруднику).</p>
     <p><b class="inl">Документы, таблицы, презентации:</b> ${docs.length - noDoc.length} из ${docs.length} доступны.</p>
     ${noDoc.length ? `<div class="note warn">Нет доступа к ${plural(noDoc.length, "файлу", "файлам", "файлам")} — откройте их для ${esc(r.account)} с правом «Читатель»
       (проще всего — всю папку с материалами разом). Ссылка открывает сам файл — в нём «Поделиться» → добавьте почту выше:
@@ -916,7 +918,7 @@ async function drvStatus() {
     ${dev ? `<div class="foot"><button class="btn green" id="vopen" type="button">Открыть видео по ссылке</button>
       <button class="btn white" id="vclose" type="button">Закрыть видео</button></div>
       <p class="hint tiny">«Открыть» — все видео программы смотрятся по ссылке, только просмотр. Ссылки видят лишь те, кто вошёл в кабинет.
-        «Закрыть» — снова только для вас. Чтобы кнопка ещё и запрещала скачивание, в редакторе скрипта добавьте сервис: «Сервисы» → «+» → Drive API.</p>` : ""}
+        «Закрыть» — снова только для вас.${r.driveApi ? " Скачивание при этом запрещено." : ' Чтобы кнопка ещё и запрещала скачивание, в редакторе скрипта откройте «Сервисы» (слева, значок «+» рядом со словом «Сервисы») и добавьте Drive API.'}</p>` : ""}
   </div>`;
   const va = async open => {
     const b = $(open ? "#vopen" : "#vclose"); b.disabled = true; b.textContent = open ? "Открываем…" : "Закрываем…";
