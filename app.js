@@ -954,7 +954,8 @@ function pdfScroll(toc, tabs, note) {
   #htmlbox table{border-collapse:collapse;table-layout:fixed}
   #htmlbox td{border:1px solid #E1DFDB;padding:4px 6px;vertical-align:top;font:12px/1.35 Arial;overflow-wrap:anywhere}
   #htmlbox img{max-width:100%;height:auto;display:block;margin:0 auto 3px}
-  #htmlbox a{color:#C84E17} #htmlbox .cut{color:#6D6B72;font-size:12px;margin:10px 2px}</style></head><body>
+  #htmlbox a{color:#C84E17} #htmlbox .cut{color:#6D6B72;font-size:12px;margin:10px 2px}
+  #htmlbox .pic,#htmlbox .picx{display:inline-block;font-style:normal;font-size:11px;color:#8A8891;background:#F2F1EF;border-radius:6px;padding:2px 6px}</style></head><body>
   <div id="selbar"></div>${topBar}
   <div id="side"><h4>Оглавление</h4><div id="toc"></div></div><div id="sc"><div id="htmlbox"></div><div id="pages"><div id="msg">Загружаем…</div></div></div>
   <div id="bar"><button id="tg" style="display:none">☰ Оглавление</button><button id="zm">−</button><span id="zv">100%</span><button id="zp">+</button><button id="zf">По ширине</button><span id="num"></span></div>
