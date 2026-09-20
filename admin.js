@@ -954,12 +954,12 @@ async function admSettings() {
     b.textContent = "Остановить";
     const t0 = Date.now();
     const mmss = ms => (ms >= 60000 ? Math.floor(ms / 60000) + " мин " : "") + Math.round(ms % 60000 / 1000) + " сек";
-    let ready = 0, skip = 0, bad = [], total = 0, from = 0, last = "", pics = 0, picLast = "", more = true, note = "запрашиваем список листов…";
+    let ready = 0, skip = 0, bad = [], total = 0, from = 0, last = "", pics = 0, picLast = "", picLeft = 0, more = true, note = "запрашиваем список листов…";
     const paint = () => {
       const seen = ready + skip + bad.length, gone = Date.now() - t0;
       const per = ready ? gone / ready : 0, left = Math.max(0, total - seen);
       box.innerHTML = `<p class="hint"><b>Напечатано: ${ready}</b>${skip ? " · уже были готовы: " + skip : ""}${total ? " · осталось: " + left + " из " + total : ""}<br>
-        ${pics ? "<b>Фото добавлено: " + pics + "</b>" + (picLast ? " — лист «" + esc(picLast) + "»" : "") + "<br>" : ""}
+        ${pics ? "<b>Фото добавлено: " + pics + "</b>" + (picLast ? " — лист «" + esc(picLast) + "»" : "") + (picLeft ? ", осталось " + picLeft : "") + "<br>" : ""}
         Идёт ${mmss(gone)}${per && left ? " · осталось примерно " + mmss(per * left) : ""}<br>
         ${esc(note)}${last ? "<br>Последний готовый: " + esc(last) : ""}${bad.length ? "<br>Не получилось: " + bad.length : ""}</p>`;
     };
@@ -986,7 +986,7 @@ async function admSettings() {
         total = r.total || total;
         (r.items || []).forEach(x => {
           if (x.state === "ready" || x.state === "cached") { ready++; last = x.title; }
-          else if (x.state === "pics") { pics += 8; picLast = x.title; note = "подставляем фото в лист «" + x.title + "»"; }
+          else if (x.state === "pics") { pics += (x.added || 0); picLeft = x.left || 0; picLast = x.title; note = "подставляем фото в лист «" + x.title + "»"; }
           else if (x.state === "skip") skip++;
           else bad.push(x.title + (x.why ? " — " + x.why : ""));
         });
