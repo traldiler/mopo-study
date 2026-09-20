@@ -13,6 +13,7 @@ const SWR_READ = /^admin\.(users|students|attempts|attempt|questions|badges|mate
 function swrRedraw() {
   const busy = document.querySelector(".modal-back, .viewer") || /INPUT|TEXTAREA|SELECT/.test((document.activeElement || {}).tagName || "");
   if (busy || !/^adm:/.test(APP.screen || "")) return;
+  if (document.getElementById("alist") || document.getElementById("qelist")) return;   /* открыт разбор попытки или редактор теста */
   const y = window.scrollY;
   if (ADM.tab === "materials" && $("#ltbl")) admMaterials();          /* список остаётся на экране, пока готовится новый */
   else screenAdmin();
@@ -45,7 +46,7 @@ async function api(action, data) {
   if (/^admin\.|^question\./.test(action) && action !== "admin.boot") {       /* что-то поменяли — списки перечитаем, когда сервер закончит */
     const r = await apiRaw(action, data);
     Object.keys(SWR).forEach(k => delete SWR[k]);
-    setTimeout(() => adminPrefetch(true), 300);
+    if (isStaff(APP.user)) setTimeout(() => adminPrefetch(true), 300);
     return r;
   }
   return apiRaw(action, data);
@@ -178,7 +179,9 @@ async function outFlush() {
   try {
     const r = await api("batch", { items: batch });
     const done = new Set((r.results || []).map(x => x.qid));      /* отказ сервера повторять бессмысленно — тоже убираем */
-    OUT.q = OUT.q.filter(x => !done.has(x.qid)); OUT.fail = 0;
+    const before = OUT.q.length;
+    OUT.q = OUT.q.filter(x => !done.has(x.qid));
+    OUT.fail = OUT.q.length < before ? 0 : OUT.fail + 1;           /* ничего не подтвердилось — не повторяем каждые 50 мс */
   } catch (e) { OUT.fail++; }
   OUT.busy = false; outKeep();
   if (OUT.q.length) { clearTimeout(OUT.timer); OUT.timer = setTimeout(outFlush, OUT.fail ? Math.min(30000, 3000 * OUT.fail) : 50); }
@@ -355,7 +358,9 @@ function forgotPassword(login0) {
 async function logout(silent) {
   if ($("#me")) $("#me").hidden = true;
   if (!silent && !await ask({ title: "Выйти из кабинета", ok: "Выйти", text: "Прогресс сохранён — войдёте снова и продолжите." })) return;
-  try { await api("logout"); } catch (_) { }
+  const token = APP.token;
+  APP.token = "";                                                  /* гасим токен до запроса: иначе ответ «сессия истекла» позовёт выход ещё раз */
+  try { if (token) await apiRaw("logout", { token: token }); } catch (_) { }
   APP.token = ""; APP.user = null; localStorage.removeItem("mopo-token");
   snapDrop(); PR.program = null; PR.progress = null; MAT_HEX = ""; MAT_KEY = null;
   try { caches.delete(DOCC); } catch (e) { }
@@ -428,7 +433,7 @@ function go(screen) {
   if (screen === "notes") screenNotes();
   if (screen === "questions") screenQuestions();
   if (screen === "profile") screenProfile();
-  if (screen === "exam") examGate();
+  if (screen === "exam") { const r = examGate(); if (r && r.catch) r.catch(fail); }
   if (/^adm:/.test(screen)) screenAdmin(screen.slice(4));
 }
 
@@ -575,7 +580,7 @@ function openBlock(n, focusLesson, subIndex) {
   const notesCount = Object.keys(PR.progress.notes || {})
     .filter(k => subs.some(s => s.lessons.some(l => l.id === k)))
     .reduce((acc, k) => acc + (PR.progress.notes[k] || []).filter(x => !x.kind || x.kind === "note").length, 0);
-  $("#htitle").textContent = "Блок " + n;
+  $("#htitle").textContent = "Блок " + blockNum(n);
   $("#app").innerHTML = `
     <div class="crumbs"><button class="link" id="back" type="button">← Все блоки</button></div>
     <section class="bhero">
@@ -670,7 +675,7 @@ function openBlock(n, focusLesson, subIndex) {
     else { PR.sub = cur; drawTopic(); }
     return;
   }
-  PR.sub = -1;
+  PR.sub = cur;                                      /* запоминаем открытую тему: иначе после отметки экран прыгает на первую */
 
   const render = mode => {
     host.innerHTML = "";
@@ -738,7 +743,7 @@ function quizRow(quizId, title) {
     row.appendChild(r);
   }
   const b = el("button", "btn" + (q.passed ? " ghost" : ""), q.passed ? "Пройти ещё раз" : "Пройти тест");
-  b.type = "button"; b.onclick = () => startQuiz(quizId, title);
+  b.type = "button"; b.onclick = () => { const r = startQuiz(quizId, title); if (r && r.catch) r.catch(fail); };
   row.appendChild(b);
   return row;
 }
@@ -910,16 +915,17 @@ function pdfScroll(toc, tabs, note) {
   const COLJ = JSON.stringify(MARKERS.map(m => m && m.c));
   const list = (tabs || []).map(t => (typeof t === "string" ? { name: t } : t));
   const TABSJ = JSON.stringify(list).replace(/</g, "\\u003c");
-  const topBar = list.length ? `<div id="top"><div id="tabs">` +
-    list.map((t, i) => `<button type="button" data-t="${i}"${i ? "" : ' class="on"'}>${esc(t.name)}</button>`).join("") +
-    `</div>${note ? `<div id="note">${esc(note)}</div>` : ""}</div>` : "";
+  const topBar = list.length ? `<div id="top"><div id="tabs"><label for="tsel">Лист</label>
+    <select id="tsel">${list.map((t, i) => `<option value="${i}">${esc(t.name)}</option>`).join("")}</select>
+    <span id="tnum">1 из ${list.length}</span></div>${note ? `<div id="note">${esc(note)}</div>` : ""}</div>` : "";
   return `<!doctype html><html><head><meta charset="utf-8"><style>
   html,body{margin:0;height:100%;background:#E9E8E5;font:13px Arial,sans-serif}
   #sc{position:absolute;left:0;right:0;top:var(--top,0px);bottom:44px;overflow:auto} body.side #sc{left:280px}
   #top{position:absolute;left:0;right:0;top:0;z-index:6;background:#F7F6F4;border-bottom:1px solid #E5E3DF}
-  #tabs{display:flex;flex-wrap:wrap;gap:6px;padding:8px 12px}
-  #tabs button{border:1px solid #E5E3DF;background:#fff;border-radius:999px;padding:5px 12px;font:12px Arial;cursor:pointer;color:#232227}
-  #tabs button.on{background:#232227;color:#fff;border-color:#232227}
+  #tabs{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:8px 12px}
+  #tabs label{font:600 12px Arial;color:#6D6B72;text-transform:uppercase;letter-spacing:.04em}
+  #tabs select{max-width:min(70vw,460px);border:1px solid #E5E3DF;background:#fff;border-radius:999px;padding:6px 12px;font:13px Arial;color:#232227;cursor:pointer}
+  #tabs #tnum{font:12px Arial;color:#6D6B72}
   #note{padding:5px 12px;background:#FDF6F1;border-top:1px solid #F0DFD3;color:#8A5A00;font-size:12px}
   #side{position:absolute;left:0;top:var(--top,0px);bottom:44px;width:280px;overflow:auto;background:#fff;border-right:1px solid #E0DED9;box-sizing:border-box;padding:14px 10px 30px;display:none}
   body.side #side{display:block} #side h4{margin:2px 8px 10px;font:700 12px Arial;letter-spacing:.04em;text-transform:uppercase;color:#6D6B72}
@@ -950,9 +956,9 @@ function pdfScroll(toc, tabs, note) {
     catch(e){ pdfjsLib.GlobalWorkerOptions.workerSrc=W; }
     var sc=document.getElementById("sc"), wrap=document.getElementById("pages");
     var pdf=null, pages=[], z=1, fit=1, gen=0, TOC=${TOCJ}, TABS=${TABSJ}, marks=[], curTab=0, busyTab=false;
-    var SKIP=/^(содержание|оглавление|contents|tableofcontents)\d*$/;
-    var top=document.getElementById("top");
-    function fixTop(){ document.documentElement.style.setProperty("--top",(top?top.offsetHeight:0)+"px"); }
+    var SKIP=/^(содержание|оглавление|contents|tableofcontents)\\d*$/;
+    var topEl=document.getElementById("top");
+    function fixTop(){ document.documentElement.style.setProperty("--top",(topEl?topEl.offsetHeight:0)+"px"); }
     fixTop(); window.addEventListener("resize",fixTop);
     function wait(text){ wrap.innerHTML='<div id="msg">'+text+'</div>'; }
     /* один документ или один лист таблицы: страницы строим заново */
@@ -966,7 +972,7 @@ function pdfScroll(toc, tabs, note) {
         pages.push({p:p,v:p.getViewport({scale:1})});
       }
       fit=fitScale(); layout(); num();
-      if(TOC.length) buildToc();
+      if(!TABS.length) buildToc();                    /* оглавление — для документов; у таблицы вместо него список листов */
       busyTab=false;
     }
     function fitScale(){ var w=0; pages.forEach(function(x){ w=Math.max(w,x.v.width); }); return Math.min(1.6,(sc.clientWidth-32)/w); }
@@ -1021,7 +1027,7 @@ function pdfScroll(toc, tabs, note) {
     var COLORS=${COLJ}, MARKS=[], bar=document.getElementById("selbar");
     bar.innerHTML='<button type="button" data-q="1">Заметка</button>' +
       COLORS.map(function(c,i){ return c?'<button type="button" class="dot" data-c="'+i+'" style="background:'+c+'" title="Маркер"></button>':""; }).join("");
-    function selText(){ var s=window.getSelection(); return s&&!s.isCollapsed?String(s).replace(/\s+/g," ").trim():""; }
+    function selText(){ var s=window.getSelection(); return s&&!s.isCollapsed?String(s).replace(/\\s+/g," ").trim():""; }
     function hideBar(){ bar.classList.remove("on"); }
     document.addEventListener("mouseup",function(){ setTimeout(function(){
       var t=selText(); if(t.length<2){ hideBar(); return; }
@@ -1038,7 +1044,7 @@ function pdfScroll(toc, tabs, note) {
       hideBar(); try{ window.getSelection().removeAllRanges(); }catch(e2){}
     });
     /* подсветка сохранённых выделений: ищем фразу в тексте страницы и кладём цветные прямоугольники под текст */
-    function nz(t){ return String(t||"").toLowerCase().replace(/ё/g,"е").replace(/\s+/g," "); }
+    function nz(t){ return String(t||"").toLowerCase().replace(/ё/g,"е").replace(/\\s+/g," "); }
     function paintMarks(x){
       if(!x.box) return;
       [].slice.call(x.box.querySelectorAll(".mk")).forEach(function(n){ n.remove(); });
@@ -1121,13 +1127,15 @@ function pdfScroll(toc, tabs, note) {
       if(d.mopoPdf){ if(d.i!=null&&d.i!==curTab) return; boot(new Uint8Array(d.mopoPdf)); }
       if(d.mopoErr&&(d.i==null||d.i===curTab)){ busyTab=false; wait("Не удалось открыть: "+d.mopoErr+"<br><br>Нажмите вкладку ещё раз."); }
     });
+    var tsel=document.getElementById("tsel"), tnum=document.getElementById("tnum");
     function askTab(i){
       curTab=i; busyTab=true;
-      [].slice.call(document.querySelectorAll("#tabs [data-t]")).forEach(function(b){ b.classList.toggle("on",+b.dataset.t===i); });
+      if(tsel) tsel.value=String(i);
+      if(tnum) tnum.textContent=(i+1)+" из "+TABS.length;
       wait("Загружаем «"+((TABS[i]||{}).name||"лист")+"»… первое открытие может занять пару минут");
       parent.postMessage({mopo:"needsheet",i:i},"*");
     }
-    [].slice.call(document.querySelectorAll("#tabs [data-t]")).forEach(function(b){ b.onclick=function(){ if(!busyTab||+b.dataset.t!==curTab) askTab(+b.dataset.t); }; });
+    if(tsel) tsel.onchange=function(){ askTab(+tsel.value); };
     if(TABS.length) askTab(0); else { wait("Готовим документ…"); parent.postMessage({mopo:"pdfready"},"*"); }
   })().catch(function(e){ document.getElementById("pages").innerHTML='<div id="msg">Не удалось показать файл: '+e.message+'</div>'; });<\/script></body></html>`;
 }
@@ -1155,7 +1163,7 @@ function renderDoc(frame, r, ref) {
         send({ mopoPdf: buf, i: i }, [buf]);
       } catch (err) { send({ mopoErr: String(err.message || err), i: i }); }
     };
-    window.addEventListener("message", give);
+    frameListen(frame, give);
     frame.srcdoc = watermark(pdfScroll([], names, SHEET_NOTE));
     return;
   }
@@ -1188,12 +1196,20 @@ function renderDoc(frame, r, ref) {
   /* сам файл в страницу не зашиваем — окно просит его и получает сообщением: так быстрее и не ломается на больших документах */
   const give = e => {
     if (e.source !== frame.contentWindow || !e.data || e.data.mopo !== "pdfready") return;
-    window.removeEventListener("message", give);
     const copy = bytes.slice().buffer;
     frame.contentWindow.postMessage({ mopoPdf: copy }, "*", [copy]);
   };
-  window.addEventListener("message", give);
+  frameListen(frame, give);
   frame.srcdoc = watermark(r.doc ? pdfScroll(r.toc) : pdfPage());
+}
+/* один слушатель на окно просмотра: старый снимаем, иначе на одно нажатие уходит два запроса */
+function frameListen(frame, fn) {
+  if (frame.__give) window.removeEventListener("message", frame.__give);
+  frame.__give = fn;
+  window.addEventListener("message", fn);
+}
+function frameUnlisten(frame) {
+  if (frame && frame.__give) { window.removeEventListener("message", frame.__give); frame.__give = null; }
 }
 function b64bytes(b64) {
   const clean = String(b64 || "").replace(/[^A-Za-z0-9+/=]/g, "");
@@ -1209,7 +1225,7 @@ async function loadDoc(frame, l) {
   try {
     const r = await api("doc.get", { lessonId: l.id, have: cached ? cached.mt : "" });
     if (r.same) return;
-    await docCachePut(l.id, r);
+    if (r && !r.service && (r.html || r.pdf || r.sheets)) await docCachePut(l.id, r);   /* заглушку Google не запоминаем */
     if (!frame.isConnected) return;
     renderDoc(frame, r, { lessonId: l.id });
     if (cached) toast("Документ обновили — показываем свежую версию");
@@ -1224,7 +1240,7 @@ async function loadDocUrl(frame, url, title) {
   try {
     const r = await api("doc.get", { url: url, have: cached ? cached.mt : "" });
     if (r.same) return cached;
-    await docCachePut(key, r);
+    if (r && !r.service && (r.html || r.pdf || r.sheets)) await docCachePut(key, r);
     if (frame.isConnected) renderDoc(frame, r, { url: url });
     return r;
   } catch (e) {
@@ -1275,7 +1291,7 @@ function openLesson(l, at, quote) {
   const v = el("div", "viewer split");
   const gk = APP.demo ? "" : gdocKind(l), proxied = !!gk;                 /* документ Google — копией через сервер */
   const video = l.kind === "видео", inner = isInternal(l.url), framed = inner || proxied;
-  const textual = /^konspekt\//.test(String(l.url)) || gk === "doc";   /* маркер и цитаты: конспекты и документы Google */
+  const textual = /^konspekt\//.test(String(l.url)) || gk === "doc" || gk === "sheet";   /* маркер и цитаты: конспекты, документы и таблицы */
   const slides = /docs\.google\.com\/presentation\//.test(String(l.url));
   const src = inner ? l.url : driveEmbed(l.url);
   let tab = quote && notesOf(l.id).some(n => isHl(n) && n.quote === quote) ? "hl" : "note";
@@ -1351,7 +1367,7 @@ function openLesson(l, at, quote) {
 
   const close = () => {
     LOC.l = null;
-    v.remove(); lockScroll(false); window.removeEventListener("message", onMsg);
+    v.remove(); lockScroll(false); window.removeEventListener("message", onMsg); frameUnlisten(v.querySelector("iframe"));
     if (tick) clearInterval(tick);
     if (watchFocus) window.removeEventListener("blur", watchFocus);
     backToPlace();
@@ -2156,8 +2172,8 @@ async function locRestore() {
   if (sc === "cabinet") {
     APP.screen = "cabinet"; if (staff) try { localStorage.setItem(modeKey(), "mopo"); } catch (e) { }
     renderNav(); await screenCabinet();
-    const b = q.get("b"), u = q.get("u"), l = q.get("l");
-    if (b != null && PR.program.blocks.some(x => String(x.n) === String(b))) openBlock(Number(b), null, u != null ? Number(u) : undefined);
+    const b = q.get("b"), u = q.get("u"), l = q.get("l"), open = openMap();
+    if (b != null && PR.program.blocks.some(x => String(x.n) === String(b)) && open[Number(b)]) openBlock(Number(b), null, u != null ? Number(u) : undefined);
     if (l) openLessonById(l);
     return true;
   }

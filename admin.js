@@ -865,8 +865,18 @@ async function admSettings() {
         Для этого у почты, от которой работает кабинет, должен быть доступ к файлам. Видео Google Диск через кабинет не пропускает —
         их открываем «по ссылке, только просмотр» одной кнопкой.</p>
       <div class="foot"><button class="btn white" id="drvcheck" type="button">Проверить доступ к файлам</button></div>
-      <div id="drvres"></div></div>`;
+      <div id="drvres"></div></div>
+    ${APP.user.role === "dev" ? `<div class="card" id="acccard"><h2>Доступ сотрудников к самим документам</h2>
+      <p class="lead">Обычно сотрудник видит только копии в кабинете. Когда обучение пройдено, можно открыть ему чтение самих файлов
+        на Диске — выбрать нужные галочками и нажать «Открыть». Так же одной кнопкой доступ закрывается.</p>
+      <div class="tbar">
+        <label class="f">Почта сотрудника</label>
+        <input type="text" id="accmail" placeholder="ivanov@gmail.com" style="max-width:280px">
+      </div>
+      <div class="foot"><button class="btn white" id="accload" type="button">Показать список файлов</button></div>
+      <div id="accres"></div></div>` : ""}`;
   $("#drvcheck").onclick = () => drvStatus();
+  if ($("#accload")) $("#accload").onclick = () => accFiles();
   $("#csave").onclick = async () => {
     const g = $("#wagroup").value.trim();
     if (g && !/^https:\/\/chat\.whatsapp\.com\/\S+$/.test(g)) return toast("Ссылка на группу должна начинаться с https://chat.whatsapp.com/");
@@ -876,6 +886,53 @@ async function admSettings() {
       toast("Сохранено");
     } catch (e) { fail(e); }
   };
+}
+
+/* список всех файлов программы и ссылок: галочки + «Открыть» / «Закрыть» доступ конкретному сотруднику */
+async function accFiles() {
+  const box = $("#accres"), btn = $("#accload");
+  btn.disabled = true; btn.textContent = "Загружаем…";
+  let r;
+  try { r = await api("admin.files"); } catch (e) { btn.disabled = false; btn.textContent = "Показать список файлов"; return fail(e); }
+  btn.disabled = false; btn.textContent = "Обновить список";
+  const files = r.files || [];
+  const group = (t, list) => list.length ? `<div class="accgrp"><b>${esc(t)}</b> <button type="button" class="link" data-all="${esc(t)}">выбрать все</button>
+    ${list.map(f => `<label class="accrow"><input type="checkbox" value="${esc(f.id)}" data-g="${esc(t)}"> <span>${esc(f.title)}</span></label>`).join("")}</div>` : "";
+  box.innerHTML = `<div class="acc">
+    ${group("Материалы программы", files.filter(f => !f.video && !f.link))}
+    ${group("Документы по ссылкам", files.filter(f => f.link))}
+    ${group("Видео", files.filter(f => f.video))}
+    <div class="foot"><button class="btn green" id="accopen" type="button">Открыть доступ</button>
+      <button class="btn white" id="accclose" type="button">Закрыть доступ</button>
+      <span class="hint tiny" id="accinfo"></span></div></div>`;
+  box.querySelectorAll("[data-all]").forEach(b => b.onclick = () => {
+    const on = [...box.querySelectorAll(`input[data-g="${b.dataset.all}"]`)].some(x => !x.checked);
+    box.querySelectorAll(`input[data-g="${b.dataset.all}"]`).forEach(x => x.checked = on);
+  });
+  const run = async open => {
+    const mail = $("#accmail").value.trim();
+    const ids = [...box.querySelectorAll("input:checked")].map(x => x.value);
+    if (!mail) return toast("Впишите почту сотрудника");
+    if (!ids.length) return toast("Отметьте галочками файлы");
+    if (!open && !await ask({ title: "Закрыть доступ?", text: `Сотрудник ${esc(mail)} перестанет видеть ${ids.length} файлов на Диске.`, ok: "Закрыть", danger: true })) return;
+    const b1 = $("#accopen"), b2 = $("#accclose"), info = $("#accinfo");
+    b1.disabled = b2.disabled = true;
+    let from = 0, done = 0, fail2 = [];
+    try {
+      do {
+        const part = await api("admin.fileAccess", { data: { email: mail, ids: ids, open: open, from: from, count: 10 } });
+        done += part.done; fail2 = fail2.concat(part.fail || []);
+        info.textContent = (open ? "Открываем… " : "Закрываем… ") + (done + fail2.length) + " из " + ids.length;
+        from = part.next || 0;
+      } while (from);
+      info.textContent = (open ? "Открыто: " : "Закрыто: ") + done + " из " + ids.length + (fail2.length ? ". Не вышло: " + fail2.length : "");
+      if (fail2.length) box.insertAdjacentHTML("beforeend", `<div class="note warn">Не получилось у ${fail2.length}: сервис не может делиться чужими файлами.
+        <ul>${fail2.slice(0, 10).map(x => `<li>${esc(x)}</li>`).join("")}</ul></div>`);
+    } catch (e) { fail(e); }
+    b1.disabled = b2.disabled = false;
+  };
+  $("#accopen").onclick = () => run(true);
+  $("#accclose").onclick = () => run(false);
 }
 
 /* доступ сервиса к файлам программы: чего не хватает и кнопки для видео */
@@ -921,12 +978,25 @@ async function drvStatus() {
         «Закрыть» — снова только для вас.${r.driveApi ? " Скачивание при этом запрещено." : ' Чтобы кнопка ещё и запрещала скачивание, в редакторе скрипта откройте «Сервисы» (слева, значок «+» рядом со словом «Сервисы») и добавьте Drive API.'}</p>` : ""}
   </div>`;
   const va = async open => {
-    const b = $(open ? "#vopen" : "#vclose"); b.disabled = true; b.textContent = open ? "Открываем…" : "Закрываем…";
+    const b = $(open ? "#vopen" : "#vclose"), other = $(open ? "#vclose" : "#vopen");
+    b.disabled = other.disabled = true;
+    let from = 0, done = 0, bad = [], total = 0, noDownload = true;
     try {
-      const x = await api("admin.videoAccess", { open: open });
-      toast((open ? "Открыто видео: " : "Закрыто видео: ") + x.done + (x.fail.length ? ", не вышло: " + x.fail.length : "") + (open && !x.noDownload ? ". Скачивание не запрещено — подключите Drive API" : ""));
+      do {                                              /* по 8 видео за запрос: иначе Google не успевает ответить */
+        const x = await api("admin.videoAccess", { open: open, from: from, count: 8 });
+        done += x.done; bad = bad.concat(x.fail || []); total = x.total || total; noDownload = x.noDownload;
+        b.textContent = (open ? "Открываем… " : "Закрываем… ") + (done + bad.length) + " из " + total;
+        from = x.next || 0;
+      } while (from);
+      toast((open ? "Открыто видео: " : "Закрыто видео: ") + done + " из " + total + (bad.length ? ", не вышло: " + bad.length : "") +
+        (open && !noDownload ? ". Скачивание не запрещено — подключите Drive API" : ""));
+      if (bad.length) $("#drvres").insertAdjacentHTML("beforeend",
+        `<div class="note warn">Не удалось изменить ${bad.length}: у почты кабинета нет права «Редактор» на эти файлы.
+          <ul>${bad.slice(0, 10).map(x => `<li>${esc(x)}</li>`).join("")}</ul></div>`);
       drvStatus();
-    } catch (e) { fail(e); b.disabled = false; }
+    } catch (e) { fail(e); }
+    b.disabled = other.disabled = false;
+    b.textContent = open ? "Открыть видео по ссылке" : "Закрыть видео";
   };
   if (dev) { $("#vopen").onclick = () => va(true); $("#vclose").onclick = () => va(false); }
 }

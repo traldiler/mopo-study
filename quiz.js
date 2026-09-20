@@ -210,7 +210,7 @@ async function showQuizReview(quizId, title) {
       <button class="btn" data-a="1" type="button">Пройти ещё раз</button></div></div>`;
   document.body.appendChild(back); lockScroll(true);
   back.querySelector('[data-a="0"]').onclick = () => { back.remove(); lockScroll(false); };
-  back.querySelector('[data-a="1"]').onclick = () => { back.remove(); lockScroll(false); startQuiz(quizId, title); };
+  back.querySelector('[data-a="1"]').onclick = () => { back.remove(); lockScroll(false); const r = startQuiz(quizId, title); if (r && r.catch) r.catch(fail); };
   back.querySelectorAll("[data-ref]").forEach(b2 => b2.onclick = () => openLessonById(b2.dataset.ref));
 }
 
