@@ -1630,5 +1630,7 @@ label.f{font-family:var(--f-text); font-size:13px; font-weight:600; letter-spaci
 .note.ok{background:var(--ok-soft,#E4F4EC); color:var(--ok-ink,#14795A); border-radius:12px; padding:10px 12px; margin:10px 0;}
 
 /* список незакрытых блоков в окне допуска к экзамену */
-.notready{margin:6px 0 10px; padding-left:18px; max-height:40vh; overflow:auto;}
-.notready li{margin:2px 0; line-height:1.35;}
+.notready{margin:8px 0 12px; padding:0; list-style:none;}   /* без точек: номер блока и так в строке */
+.notready li{margin:3px 0; line-height:1.35; padding-left:2px;}
+.notready li b{display:inline; font-size:inherit; margin:0;}   /* номер блока в строке, а не отдельным заголовком */
+.modal{max-height:86vh; overflow:auto;}                        /* длинный список не обрезаем — прокручивается всё окно */
