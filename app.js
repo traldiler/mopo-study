@@ -821,7 +821,7 @@ function gdocKind(l) {
   if (l.kind !== "видео" && /drive\.google\.com\/(file\/d\/|open\?id=)/.test(u)) return "pdf";
   return "";
 }
-const DOCC = "mopo-docs-v8";                           /* v2: таблицы 1 в 1 и кликабельное оглавление — старые копии не берём */
+const DOCC = "mopo-docs-v9";                           /* v2: таблицы 1 в 1 и кликабельное оглавление — старые копии не берём */
 async function docCacheGet(id) { try { const r = await (await caches.open(DOCC)).match("/__doc/" + encodeURIComponent(id)); return r ? await r.json() : null; } catch (e) { return null; } }
 async function docCachePut(id, v) { try { await (await caches.open(DOCC)).put("/__doc/" + encodeURIComponent(id), new Response(JSON.stringify(v), { headers: { "Content-Type": "application/json" } })); } catch (e) { } }
 const docPage = (text) => `<body style="font:15px/1.5 Arial,sans-serif;color:#232227;padding:28px">${text}</body>`;
@@ -966,7 +966,7 @@ function pdfScroll(toc) {
         d.style.width=Math.abs(r[2]-r[0])+"px"; d.style.height=Math.abs(r[3]-r[1])+"px";
         d.title=a.url?"Открыть ссылку":"Перейти к разделу";
         d.onclick=function(){ if(!a.url) return go(a.dest);
-          if(/(docs\.google\.com|drive\.google\.com)/.test(a.url)) parent.postMessage({mopo:"opendoc",url:a.url},"*");
+          if(/(docs\\.google\\.com|drive\\.google\\.com)/.test(a.url)) parent.postMessage({mopo:"opendoc",url:a.url},"*");
           else window.open(a.url,"_blank","noopener"); }; box.appendChild(d); }); }catch(e){}
       paintMarks(x);
     }
@@ -1100,9 +1100,11 @@ function pdfScroll(toc) {
   })().catch(function(e){ document.getElementById("pages").innerHTML='<div id="msg">Не удалось показать файл: '+e.message+'</div>'; });<\/script></body></html>`;
 }
 /* таблица: вкладки листов рисует кабинет, сам лист приходит отдельным запросом — большие таблицы иначе не успевают собраться */
-function sheetShell(names) {
-  const NAMESJ = JSON.stringify(names || []).replace(/</g, "\\u003c");
-  const tabs = (names || []).map((n, i) => `<button type="button" data-i="${i}"${i ? "" : ' class="on"'}>${esc(n)}</button>`).join("");
+function sheetShell(names, selfId) {
+  const list = (names || []).map(n => (typeof n === "string" ? { name: n, gid: "" } : n));
+  const NAMESJ = JSON.stringify(list).replace(/</g, "\\u003c");
+  const SELFJ = JSON.stringify(String(selfId || ""));
+  const tabs = list.map((n, i) => `<button type="button" data-i="${i}"${i ? "" : ' class="on"'}>${esc(n.name)}</button>`).join("");
   return `<!doctype html><html><head><meta charset="utf-8"><style>
   html,body{margin:0;height:100%;background:#fff;font:13px Arial,sans-serif;color:#232227}
   body{display:flex;flex-direction:column}
@@ -1111,10 +1113,10 @@ function sheetShell(names) {
   #bar button.on{background:#232227;color:#fff;border-color:#232227}
   #bar .z{margin-left:auto;display:flex;gap:6px;align-items:center;font:12px Arial;color:#6D6B72}
   #wrap{flex:1 1 auto;overflow:auto;padding:12px;min-height:0}#inner{transform-origin:0 0}
-  table{border-collapse:collapse;table-layout:fixed}
+  table{border-collapse:collapse;table-layout:fixed;width:max-content}
   td{border:1px solid #E1DFDB;padding:4px 6px;vertical-align:top;font-size:12px;line-height:1.35;overflow-wrap:anywhere}
   .cut{color:#6D6B72;font-size:12px;margin:10px 2px}
-  td a{color:#C84E17}
+  td a{color:#C84E17} td img{max-width:100%;height:auto;display:block;margin:0 auto 2px}
   .wait{padding:40px 24px;color:#6D6B72;display:flex;gap:12px;align-items:center;font-size:14px}
   .sp{width:20px;height:20px;border:3px solid #E5E3DF;border-top-color:#E66023;border-radius:50%;animation:sp 1s linear infinite;flex:0 0 auto}
   @keyframes sp{to{transform:rotate(360deg)}}</style></head><body>
@@ -1122,7 +1124,7 @@ function sheetShell(names) {
     <button type="button" id="zp">+</button><button type="button" id="zf">По ширине</button></span></div>
   <div id="wrap"><div id="inner"><div class="wait"><span class="sp"></span><span>Загружаем лист…</span></div></div></div>
   <script>(function(){
-    var NAMES=${NAMESJ};
+    var NAMES=${NAMESJ}, SELF=${SELFJ};
     var z=1, wrap=document.getElementById("wrap"), inner=document.getElementById("inner"), cache={}, cur=0, names=NAMES;
     function set(){ inner.style.transform="scale("+z+")"; inner.style.width=(100/z)+"%"; document.getElementById("zv").textContent=Math.round(z*100)+"%"; }
     function step(d){ z=Math.min(2.5,Math.max(.25,Math.round((z+d)*20)/20)); set(); }
@@ -1141,7 +1143,7 @@ function sheetShell(names) {
       cur=i;
       [].slice.call(document.querySelectorAll("#bar [data-i]")).forEach(function(b){ b.classList.toggle("on",+b.dataset.i===i); });
       if(cache[i]!==undefined){ inner.innerHTML=cache[i]||'<div class="wait"><span>Лист пустой.</span></div>'; wrap.scrollTop=0; wrap.scrollLeft=0; fit(); return; }
-      inner.innerHTML='<div class="wait"><span class="sp"></span><span>Загружаем лист «'+(names[i]||"")+'»… в первый раз это может занять до минуты</span></div>';
+      inner.innerHTML='<div class="wait"><span class="sp"></span><span>Загружаем лист «'+((names[i]||{}).name||"")+'»… в первый раз это может занять до минуты</span></div>';
       parent.postMessage({mopo:"needsheet",i:i},"*");
     }
     window.addEventListener("message",function(e){
@@ -1157,7 +1159,14 @@ function sheetShell(names) {
       var a=e.target.closest&&e.target.closest("a[href]"); if(!a) return;
       var h=a.getAttribute("href")||""; if(!/^https?:/i.test(h)) return;
       e.preventDefault();
-      if(/(docs\.google\.com|drive\.google\.com)/.test(h)) parent.postMessage({mopo:"opendoc",url:h},"*");
+      /* ссылка на другую вкладку этой же таблицы («навигация по каталогу») — просто переключаем вкладку */
+      if(SELF && h.indexOf(SELF)>=0){
+        var g=(h.match(/[#&?]gid=(\\d+)/)||[])[1];
+        var k=g?names.findIndex(function(x){ return String(x.gid)===String(g); }):-1;
+        if(k>=0){ show(k); wrap.scrollTop=0; return; }
+        if(!g) return;                                      /* ссылка на саму таблицу — никуда не уходим */
+      }
+      if(/(docs\\.google\\.com|drive\\.google\\.com)/.test(h)) parent.postMessage({mopo:"opendoc",url:h},"*");
       else window.open(h,"_blank","noopener");
     },true);
     window.addEventListener("resize",function(){ setTimeout(fit,100); });
@@ -1179,7 +1188,7 @@ function renderDoc(frame, r, ref) {
       catch (err) { try { frame.contentWindow.postMessage({ mopoSheet: { i: e.data.i, error: String(err.message || err) } }, "*"); } catch (e2) { } }
     };
     window.addEventListener("message", give);
-    frame.srcdoc = watermark(sheetShell(r.sheets || []));
+    frame.srcdoc = watermark(sheetShell(r.sheets || [], r.id));
     return;
   }
   let html = r.html || "";
@@ -1273,7 +1282,7 @@ const SHIM_JS = `<script>(function(){
           var t=id?(document.getElementById(id)||document.querySelector('[name="'+id+'"]')):document.body;
           if(t) t.scrollIntoView({behavior:"smooth",block:"start"}); return; }
         if(/^https?:/i.test(h)){ e.preventDefault();
-          if(/(docs\.google\.com|drive\.google\.com)/.test(h)) parent.postMessage({mopo:"opendoc",url:h},"*");
+          if(/(docs\\.google\\.com|drive\\.google\\.com)/.test(h)) parent.postMessage({mopo:"opendoc",url:h},"*");
           else window.open(h,"_blank","noopener"); }
       },true);
     })();<\/script>`;
