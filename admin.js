@@ -897,7 +897,8 @@ async function drvStatus() {
     <p>Кабинет работает от почты <b class="inl">${esc(r.account || "—")}</b>. Проверено файлов: ${r.files.length}.</p>
     <p><b class="inl">Документы, таблицы, презентации:</b> ${docs.length - noDoc.length} из ${docs.length} доступны.</p>
     ${noDoc.length ? `<div class="note warn">Нет доступа к ${plural(noDoc.length, "файлу", "файлам", "файлам")} — откройте их для ${esc(r.account)} с правом «Читатель»
-      (проще всего — всю папку с материалами разом):<ul>${noDoc.map(f => `<li>${esc(f.title)}</li>`).join("")}</ul></div>` : ""}
+      (проще всего — всю папку с материалами разом). Ссылка открывает сам файл — в нём «Поделиться» → добавьте почту выше:
+      <ul>${noDoc.map(f => `<li>${esc(f.title)}${f.link ? " <i>(ссылка внутри другого документа)</i>" : ""} — <a href="https://drive.google.com/open?id=${esc(f.id)}" target="_blank" rel="noopener">открыть файл</a></li>`).join("")}</ul></div>` : ""}
     <p><b class="inl">Видео:</b> ${vids.length} в программе, открыто по ссылке — ${open}.</p>
     ${noVid.length ? `<div class="note warn">Кнопка не сможет управлять ${plural(noVid.length, "видео", "видео", "видео")}: у ${esc(r.account)} нет права «Редактор».
       Дайте его на папку с видео:<ul>${noVid.map(f => `<li>${esc(f.title)}</li>`).join("")}</ul></div>` : ""}

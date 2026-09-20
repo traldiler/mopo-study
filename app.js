@@ -244,7 +244,9 @@ function lockScroll(on) {
 }
 function toast(text) {
   document.querySelectorAll(".toast").forEach(t => t.remove());
-  const t = el("div", "toast", esc(text)); document.body.appendChild(t);
+  const t = el("div", "toast", esc(text)); t.title = "Нажмите, чтобы убрать";
+  t.onclick = () => t.remove();
+  document.body.appendChild(t);
   setTimeout(() => t.remove(), 6000);
 }
 function fail(e) { toast(String(e && e.message || e)); }
@@ -819,6 +821,19 @@ const DOCC = "mopo-docs-v6";                           /* v2: таблицы 1 �
 async function docCacheGet(id) { try { const r = await (await caches.open(DOCC)).match("/__doc/" + encodeURIComponent(id)); return r ? await r.json() : null; } catch (e) { return null; } }
 async function docCachePut(id, v) { try { await (await caches.open(DOCC)).put("/__doc/" + encodeURIComponent(id), new Response(JSON.stringify(v), { headers: { "Content-Type": "application/json" } })); } catch (e) { } }
 const docPage = (text) => `<body style="font:15px/1.5 Arial,sans-serif;color:#232227;padding:28px">${text}</body>`;
+/* пока Google готовит копию: видно, что именно грузится и сколько это уже длится */
+const docWait = (title) => `<body style="font:15px/1.6 Arial,sans-serif;color:#232227;padding:32px;background:#F2F1EF">
+  <div style="max-width:560px;margin:8vh auto;background:#fff;border:1px solid #E5E3DF;border-radius:20px;padding:24px 26px">
+    <div style="font-weight:800;font-size:17px;margin-bottom:6px">Готовим «${esc(title || "документ")}»</div>
+    <p style="color:#6D6B72;margin:0 0 14px">Google делает копию материала. Первое открытие большого документа или таблицы
+      может занять пару минут — дальше он будет открываться сразу.</p>
+    <div style="height:6px;border-radius:999px;background:#EDEBE7;overflow:hidden">
+      <div id="b" style="height:100%;width:12%;background:#E66023;border-radius:999px;transition:width .9s linear"></div></div>
+    <div id="t" style="color:#6D6B72;font-size:13px;margin-top:8px">идёт 0 сек</div>
+  </div>
+  <script>var n=0,b=document.getElementById("b"),t=document.getElementById("t");
+    setInterval(function(){ n++; t.textContent="идёт "+n+" сек"+(n>90?" — ещё немного, документ большой":"");
+      b.style.width=Math.min(95,12+n*1.4)+"%"; },1000);<\/script></body>`;
 const DOC_CSS = `<style>body{max-width:880px!important;margin:0 auto!important;padding:28px 36px 60px!important;background:#fff}
   img{max-width:100%!important;height:auto!important} table{max-width:100%}</style>`;
 /* оглавление в копии документа приходит простым текстом — делаем строки, совпадающие с заголовками, ссылками на них */
@@ -1117,7 +1132,7 @@ function b64bytes(b64) {
 async function loadDoc(frame, l) {
   const cached = await docCacheGet(l.id);
   if (cached) renderDoc(frame, cached);
-  else frame.srcdoc = docPage("Загружаем документ… В первый раз это может занять пару минут — Google готовит копию. Дальше документ будет открываться сразу.");
+  else frame.srcdoc = docWait(l.title);
   try {
     const r = await api("doc.get", { lessonId: l.id, have: cached ? cached.mt : "" });
     if (r.same) return;
@@ -1132,7 +1147,7 @@ async function loadDocUrl(frame, url, title) {
   const key = "u:" + url;
   const cached = await docCacheGet(key);
   if (cached) renderDoc(frame, cached);
-  else frame.srcdoc = docPage("Открываем «" + esc(title || "документ") + "»…");
+  else frame.srcdoc = docWait(title || "документ");
   try {
     const r = await api("doc.get", { url: url, have: cached ? cached.mt : "" });
     if (r.same) return cached;
@@ -1192,7 +1207,7 @@ function openLesson(l, at, quote) {
   const src = inner ? l.url : driveEmbed(l.url);
   let tab = quote && notesOf(l.id).some(n => isHl(n) && n.quote === quote) ? "hl" : "note";
   v.innerHTML = `<div class="vhead"><b>${esc(l.title)}</b>
-      <button type="button" data-a="docback" class="quiet" hidden></button>
+      <button type="button" data-a="docback" class="back" hidden></button>
       ${framed ? "" : '<button type="button" data-a="newtab" class="quiet">Открыть в новой вкладке ↗</button>'}
       <button type="button" data-a="notes" class="on first">Заметки</button>
       <button type="button" data-a="ask">${isStaff(APP.user) ? "Вопрос разработчику" : "Спросить РОПа"}</button>
@@ -1252,7 +1267,7 @@ function openLesson(l, at, quote) {
   const openDocUrl = url => {
     const u = String(url || "");
     if (chain.some(x => x.url === u)) return;                 /* уже открыт — не зацикливаемся */
-    chain.push({ title: "Документ", url: u });
+    chain.push({ title: "Документ по ссылке", url: u });
     showTop();
   };
   docBack.onclick = () => { if (chain.length > 1) { chain.pop(); showTop(); } };
