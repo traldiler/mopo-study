@@ -875,10 +875,11 @@ async function admSettings() {
         Если таблицу поправили, копия устаревает: сервис перепечатает её сам при следующем открытии, но тогда первый сотрудник подождёт.
         Кнопка ниже готовит копии заранее.</p>
       <div id="prepstat" class="hint">Смотрим, что готово…</div>
-      <div class="foot"><button class="btn white" id="prep" type="button">Подготовить копии таблиц</button>
-        <button class="btn white" id="prepcheck" type="button">Пересчитать</button>
-        <label class="f inline"><input type="checkbox" id="prepall"> перепечатать все заново</label>
-        ${dev ? '<label class="f inline"><input type="checkbox" id="prepauto"> обновлять копии ночью автоматически</label>' : ""}</div>
+      <div class="foot prepfoot"><button class="btn white" id="prep" type="button">Подготовить копии</button>
+        <button class="btn white" id="prepcheck" type="button" title="Пройти по таблицам и посмотреть, у каких листов копии устарели">Проверить, что устарело</button></div>
+      <div class="prepopts">
+        <label class="chk"><input type="checkbox" id="prepall"><span>перепечатать все заново</span></label>
+        ${dev ? '<label class="chk"><input type="checkbox" id="prepauto"><span>обновлять копии ночью автоматически</span></label>' : ""}</div>
       <p class="hint tiny">Готовые листы пропускаются — печатаются только новые и изменённые. Во время работы кнопка становится
         «Остановить»: можно прерваться и продолжить позже с того же места.${dev ? " Ночное обновление запускается в 3:00 и само доделывает остаток." : ""}</p>
       <div id="prepres"></div></div>
@@ -913,7 +914,7 @@ async function admSettings() {
       if (ab) {
         ab.checked = !!st.auto;
         if (st.auto === null) {                          /* Google ещё не дал разрешение на расписание */
-          ab.parentNode.insertAdjacentHTML("afterend",
+          ab.closest("label").insertAdjacentHTML("afterend",
             '<span class="hint tiny">Чтобы включить ночное обновление, в редакторе скрипта выберите функцию prepNightly, нажмите «Выполнить» и разрешите доступ.</span>');
         }
       }
@@ -935,14 +936,14 @@ async function admSettings() {
 
   $("#prepcheck").onclick = async () => {
     const b = $("#prepcheck");
-    b.disabled = true; b.textContent = "Считаем…";
+    b.disabled = true; b.textContent = "Проверяем…";
     try {
       const st = await api("admin.prepStat");
       $("#prepstat").innerHTML = st.left
         ? `<b class="inl">Копии устарели у ${st.left} из ${st.total} листов.</b> Готовых: ${st.ready}.`
         : `Все ${st.total} листов готовы — сотрудники открывают таблицы сразу.`;
     } catch (e) { $("#prepstat").textContent = "Не удалось пересчитать: " + (e.message || e); }
-    b.disabled = false; b.textContent = "Пересчитать";
+    b.disabled = false; b.textContent = "Проверить, что устарело";
   };
 
   $("#prep").onclick = async () => {
@@ -991,7 +992,7 @@ async function admSettings() {
       paint();
     }
     clearInterval(tick);
-    PREP.run = false; b.disabled = false; b.textContent = "Подготовить копии таблиц";
+    PREP.run = false; b.disabled = false; b.textContent = "Подготовить копии";
   };
 }
 

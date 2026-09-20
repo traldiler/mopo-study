@@ -1604,3 +1604,13 @@ label.f{font-family:var(--f-text); font-size:13px; font-weight:600; letter-spaci
 
 .f.inline{display:inline-flex; gap:6px; align-items:center; font-size:13px; color:var(--muted); text-transform:none; letter-spacing:0;}
 .f.inline input{width:16px; height:16px; accent-color:var(--accent);}
+
+/* настройки: кнопки подготовки одинакового размера, галочки — как чипы */
+.prepfoot{display:flex; gap:10px; flex-wrap:wrap; align-items:center;}
+.prepfoot .btn{min-width:210px; justify-content:center; text-align:center;}
+.prepopts{display:flex; gap:10px; flex-wrap:wrap; margin:10px 0 0;}
+.prepopts .chk{display:inline-flex; gap:8px; align-items:center; padding:8px 14px; border:1.5px solid var(--line);
+  border-radius:var(--r-pill); font-size:13px; color:var(--text); cursor:pointer; background:#fff;}
+.prepopts .chk:hover{border-color:#CFCCC6;}
+.prepopts .chk input{width:16px; height:16px; accent-color:var(--accent); cursor:pointer;}
+.prepopts .chk:has(input:checked){border-color:var(--accent); background:var(--accent-soft); color:var(--accent-ink); font-weight:600;}
