@@ -918,11 +918,7 @@ async function admSettings() {
             '<span class="hint tiny">Чтобы включить ночное обновление, в редакторе скрипта выберите функцию prepNightly, нажмите «Выполнить» и разрешите доступ.</span>');
         }
       }
-      const l = st.light;
-      $("#prepstat").innerHTML = l
-        ? (l.left ? `<b class="inl">Копии устарели у ${l.left} из ${l.total} листов.</b> Нажмите «Подготовить копии таблиц».`
-                  : `Все ${l.total} листов готовы — сотрудники открывают таблицы сразу.`)
-        : `Сколько листов готово — нажмите «Пересчитать» (сервис пройдёт по таблицам, это до минуты).`;
+      await prepStat();                                  /* строку состояния рисует общая функция */
     } catch (e) { $("#prepstat").textContent = "Не удалось узнать состояние копий: " + (e.message || e); }
   })();
 
@@ -934,16 +930,23 @@ async function admSettings() {
     box.disabled = false;
   };
 
+  const prepStat = async (heavy) => {                    /* строка «копии устарели у…»: лёгкий запрос, тяжёлый — по кнопке */
+    try {
+      const st = await api(heavy ? "admin.prepStat" : "admin.prepAutoStat");
+      const l = heavy ? st : st.light;
+      if (!l) { $("#prepstat").textContent = "Сколько листов готово — нажмите «Проверить, что устарело»."; return; }
+      $("#prepstat").innerHTML = (l.left
+        ? `<b class="inl">Копии устарели у ${l.left} из ${l.total} листов.</b>${l.ready != null ? " Готовых: " + l.ready + "." : ""}`
+        : `Все ${l.total} листов готовы — сотрудники открывают таблицы сразу.`) +
+        (l.picsLeft ? `<br>Ждут фото: ${l.picsLeft} ${plural(l.picsLeft, "снимок", "снимка", "снимков")} на ${l.picSheets} ${plural(l.picSheets, "листе", "листах", "листах")}.` : "") +
+        (l.store === false ? ` <span class="hint tiny">Копии хранятся временно (около 6 часов): у сервиса нет разрешения сохранять файлы на Диск.</span>` : "");
+    } catch (e) { /* не страшно: строка останется прежней */ }
+  };
+
   $("#prepcheck").onclick = async () => {
     const b = $("#prepcheck");
     b.disabled = true; b.textContent = "Проверяем…";
-    try {
-      const st = await api("admin.prepStat");
-      $("#prepstat").innerHTML = (st.left
-        ? `<b class="inl">Копии устарели у ${st.left} из ${st.total} листов.</b> Готовых: ${st.ready}.`
-        : `Все ${st.total} листов готовы — сотрудники открывают таблицы сразу.`) +
-        (st.store === false ? ` <span class="hint tiny">Копии хранятся временно (около 6 часов): у сервиса нет разрешения сохранять файлы на Диск.</span>` : "");
-    } catch (e) { $("#prepstat").textContent = "Не удалось пересчитать: " + (e.message || e); }
+    await prepStat(true);
     b.disabled = false; b.textContent = "Проверить, что устарело";
   };
 
@@ -992,7 +995,7 @@ async function admSettings() {
         });
         note = "";
         paint();
-        if ((ready + pics / 10) % 10 === 0) prepStat();      /* обновляем строку «копии устарели у…» по ходу */
+        if ((ready + skip) % 10 === 0) prepStat();           /* обновляем строку «копии устарели у…» по ходу */
         from = r.next || 0;
       } while (more && !PREP.stop);        /* лист с фото возвращает тот же номер — идём по нему дальше */
       note = PREP.stop ? "Остановлено. Нажмите кнопку ещё раз — продолжим с этого места." : "Готово.";
