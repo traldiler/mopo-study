@@ -1595,5 +1595,9 @@ label.f{font-family:var(--f-text); font-size:13px; font-weight:600; letter-spaci
 .acc{margin-top:8px;}
 .accgrp{margin:0 0 14px;}
 .accgrp>b{display:inline-block; font-size:13px; margin:0 8px 6px 0;}
-.accrow{display:flex; gap:8px; align-items:flex-start; padding:4px 0; font-size:13.5px;}
+.accrow{display:flex; gap:10px; align-items:flex-start; padding:4px 0; font-size:13.5px;}
+.accrow label{display:flex; gap:8px; align-items:flex-start; flex:1 1 auto;}
 .accrow input{margin-top:3px; width:16px; height:16px; accent-color:var(--accent);}
+.accrow a{color:var(--accent-ink); font-size:12.5px; white-space:nowrap; text-decoration:none; border-bottom:1px solid currentColor;}
+.accmark{font-style:normal; font-size:12px; color:transparent; min-width:52px; text-align:right;}
+.accmark.on{color:var(--ok-ink); font-weight:700;}

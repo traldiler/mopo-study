@@ -864,7 +864,11 @@ async function admSettings() {
       <p class="lead">Документы, таблицы и презентации сотрудники смотрят через кабинет — копией для чтения, без входа в Google.
         Для этого у почты, от которой работает кабинет, должен быть доступ к файлам. Видео Google Диск через кабинет не пропускает —
         их открываем «по ссылке, только просмотр» одной кнопкой.</p>
-      <div class="foot"><button class="btn white" id="drvcheck" type="button">Проверить доступ к файлам</button></div>
+      <div class="foot"><button class="btn white" id="drvcheck" type="button">Проверить доступ к файлам</button>
+        <button class="btn white" id="prep" type="button">Подготовить копии таблиц</button></div>
+      <p class="hint tiny">«Подготовить копии» — сервис заранее печатает каждый лист таблиц в PDF и хранит у себя на Диске.
+        После этого таблицы открываются у сотрудников сразу. Делать это нужно один раз и после правок в таблицах.</p>
+      <div id="prepres"></div>
       <div id="drvres"></div></div>
     ${APP.user.role === "dev" ? `<div class="card" id="acccard"><h2>Доступ сотрудников к самим документам</h2>
       <p class="lead">Обычно сотрудник видит только копии в кабинете. Когда обучение пройдено, можно открыть ему чтение самих файлов
@@ -877,6 +881,24 @@ async function admSettings() {
       <div id="accres"></div></div>` : ""}`;
   $("#drvcheck").onclick = () => drvStatus();
   if ($("#accload")) $("#accload").onclick = () => accFiles();
+  $("#prep").onclick = async () => {                     /* печатаем копии листов порциями: один лист может готовиться до минуты */
+    const b = $("#prep"), box = $("#prepres");
+    b.disabled = true;
+    let from = 0, done = 0, bad = [], total = 0;
+    try {
+      do {
+        const r = await api("admin.prepare", { from: from, count: 3 });
+        done += r.done; bad = bad.concat(r.fail || []); total = r.total || total;
+        b.textContent = "Готовим… " + (done + bad.length) + " из " + total;
+        box.innerHTML = `<p class="hint">Готово листов: ${done} из ${total}. Можно закрыть страницу — прогресс сохраняется на сервере,
+          но тогда придётся нажать кнопку ещё раз, чтобы доделать остальные.</p>`;
+        from = r.next || 0;
+      } while (from);
+      box.innerHTML = `<p class="hint">Готово: ${done} из ${total}.${bad.length ? " Не получилось: " + bad.length + "." : " Все листы подготовлены."}</p>` +
+        (bad.length ? `<div class="note warn"><ul>${bad.slice(0, 12).map(x => `<li>${esc(x)}</li>`).join("")}</ul></div>` : "");
+    } catch (e) { fail(e); }
+    b.disabled = false; b.textContent = "Подготовить копии таблиц";
+  };
   $("#csave").onclick = async () => {
     const g = $("#wagroup").value.trim();
     if (g && !/^https:\/\/chat\.whatsapp\.com\/\S+$/.test(g)) return toast("Ссылка на группу должна начинаться с https://chat.whatsapp.com/");
@@ -897,13 +919,16 @@ async function accFiles() {
   btn.disabled = false; btn.textContent = "Обновить список";
   const files = r.files || [];
   const group = (t, list) => list.length ? `<div class="accgrp"><b>${esc(t)}</b> <button type="button" class="link" data-all="${esc(t)}">выбрать все</button>
-    ${list.map(f => `<label class="accrow"><input type="checkbox" value="${esc(f.id)}" data-g="${esc(t)}"> <span>${esc(f.title)}</span></label>`).join("")}</div>` : "";
+    ${list.map(f => `<div class="accrow"><label><input type="checkbox" value="${esc(f.id)}" data-g="${esc(t)}"> <span>${esc(f.title)}</span></label>
+      <a href="${esc(f.url || ("https://drive.google.com/open?id=" + f.id))}" target="_blank" rel="noopener">открыть ↗</a>
+      <i class="accmark" data-id="${esc(f.id)}"></i></div>`).join("")}</div>` : "";
   box.innerHTML = `<div class="acc">
     ${group("Материалы программы", files.filter(f => !f.video && !f.link))}
     ${group("Документы по ссылкам", files.filter(f => f.link))}
     ${group("Видео", files.filter(f => f.video))}
     <div class="foot"><button class="btn green" id="accopen" type="button">Открыть доступ</button>
       <button class="btn white" id="accclose" type="button">Закрыть доступ</button>
+      <button class="btn white" id="acccheck" type="button">Показать, что уже открыто</button>
       <span class="hint tiny" id="accinfo"></span></div></div>`;
   box.querySelectorAll("[data-all]").forEach(b => b.onclick = () => {
     const on = [...box.querySelectorAll(`input[data-g="${b.dataset.all}"]`)].some(x => !x.checked);
@@ -933,6 +958,28 @@ async function accFiles() {
   };
   $("#accopen").onclick = () => run(true);
   $("#accclose").onclick = () => run(false);
+  $("#acccheck").onclick = async () => {                 /* отмечаем зелёным то, к чему у сотрудника уже есть доступ */
+    const mail = $("#accmail").value.trim();
+    if (!mail) return toast("Впишите почту сотрудника");
+    const b = $("#acccheck"), info = $("#accinfo");
+    b.disabled = true;
+    box.querySelectorAll(".accmark").forEach(m => { m.textContent = ""; m.className = "accmark"; });
+    let from = 0, seen = 0;
+    try {
+      do {
+        const part = await api("admin.fileWho", { data: { email: mail, from: from, count: 15 } });
+        (part.has || []).forEach(id => {
+          const m = box.querySelector(`.accmark[data-id="${id}"]`);
+          if (m) { m.textContent = "открыт"; m.className = "accmark on"; }
+        });
+        seen += 15; info.textContent = "Проверяем… " + Math.min(seen, part.total) + " из " + part.total;
+        from = part.next || 0;
+      } while (from);
+      const n = box.querySelectorAll(".accmark.on").length;
+      info.textContent = "Уже открыто файлов: " + n;
+    } catch (e) { fail(e); }
+    b.disabled = false;
+  };
 }
 
 /* доступ сервиса к файлам программы: чего не хватает и кнопки для видео */
