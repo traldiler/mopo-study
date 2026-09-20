@@ -821,7 +821,7 @@ function gdocKind(l) {
   if (l.kind !== "видео" && /drive\.google\.com\/(file\/d\/|open\?id=)/.test(u)) return "pdf";
   return "";
 }
-const DOCC = "mopo-docs-v9";                           /* v2: таблицы 1 в 1 и кликабельное оглавление — старые копии не берём */
+const DOCC = "mopo-docs-v10";                           /* v2: таблицы 1 в 1 и кликабельное оглавление — старые копии не берём */
 async function docCacheGet(id) { try { const r = await (await caches.open(DOCC)).match("/__doc/" + encodeURIComponent(id)); return r ? await r.json() : null; } catch (e) { return null; } }
 async function docCachePut(id, v) { try { await (await caches.open(DOCC)).put("/__doc/" + encodeURIComponent(id), new Response(JSON.stringify(v), { headers: { "Content-Type": "application/json" } })); } catch (e) { } }
 const docPage = (text) => `<body style="font:15px/1.5 Arial,sans-serif;color:#232227;padding:28px">${text}</body>`;
@@ -1117,11 +1117,14 @@ function sheetShell(names, selfId) {
   td{border:1px solid #E1DFDB;padding:4px 6px;vertical-align:top;font-size:12px;line-height:1.35;overflow-wrap:anywhere}
   .cut{color:#6D6B72;font-size:12px;margin:10px 2px}
   td a{color:#C84E17} td img{max-width:100%;height:auto;display:block;margin:0 auto 2px}
+  #note{flex:0 0 auto;padding:6px 12px;background:#FDF6F1;border-bottom:1px solid #F0DFD3;color:#8A5A00;font-size:12px}
   .wait{padding:40px 24px;color:#6D6B72;display:flex;gap:12px;align-items:center;font-size:14px}
   .sp{width:20px;height:20px;border:3px solid #E5E3DF;border-top-color:#E66023;border-radius:50%;animation:sp 1s linear infinite;flex:0 0 auto}
   @keyframes sp{to{transform:rotate(360deg)}}</style></head><body>
   <div id="bar">${tabs || "<b>Лист</b>"}<span class="z"><button type="button" id="zm">−</button><span id="zv">100%</span>
     <button type="button" id="zp">+</button><button type="button" id="zf">По ширине</button></span></div>
+  <div id="note">Это сохранённая копия таблицы: фильтры, сортировка и другие возможности Google Таблиц здесь не работают.
+    После обучения у вас будет доступ к самим документам.</div>
   <div id="wrap"><div id="inner"><div class="wait"><span class="sp"></span><span>Загружаем лист…</span></div></div></div>
   <script>(function(){
     var NAMES=${NAMESJ}, SELF=${SELFJ};
@@ -1327,7 +1330,7 @@ function openLesson(l, at, quote) {
             </div>
             <p class="hint tiny">Счётчик идёт по вашим кликам по видео: Google Диск не сообщает, на какой минуте плеер. Пока видео грузится и после перемотки время может разойтись — поправьте его в поле вручную.</p>` : ""}
           ${textual ? '<p class="hint tiny">Выделите фразу: цветной маркер — в «Выделения», кнопка «Заметка» — сюда.</p>' : ""}
-          ${gk === "sheet" ? '<p class="hint tiny">Таблица показана вкладками, как в Google: листы сверху, масштаб − / + или щипок на трекпаде. Нужное выделите и скопируйте в заметку.</p>'
+          ${gk === "sheet" ? '<p class="hint tiny">Таблица показана вкладками, как в Google: листы сверху, масштаб − / + или щипок на трекпаде. Это сохранённая копия: фильтров и сортировки Google здесь нет — они появятся, когда после обучения вам откроют сами документы. Нужное выделите и скопируйте в заметку.</p>'
             : gk === "doc" ? '<p class="hint tiny">Документ показан 1 в 1, как в Google: прокрутка колесом, масштаб − / + внизу или щипком, оглавление слева. Выделите фразу — цветной маркер или кнопка «Заметка».</p>'
             : gk === "pdf" ? '<p class="hint tiny">Листайте кликом по левому или правому краю, кнопками внизу или стрелками ← →. Текст на слайде можно выделить и скопировать в заметку.</p>'
             : slides ? '<p class="hint tiny">Текст со слайдов скопировать нельзя — Google показывает их картинками. Листайте стрелками ← → на клавиатуре или под слайдом.</p>'
