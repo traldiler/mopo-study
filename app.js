@@ -1141,10 +1141,16 @@ function renderDoc(frame, r, ref) {
       if (e.source !== frame.contentWindow || !e.data || e.data.mopo !== "needsheet") return;
       const i = e.data.i;
       const send = (msg, transfer) => { try { frame.contentWindow.postMessage(msg, "*", transfer || []); } catch (e2) { } };
+      const ck = "sh:" + JSON.stringify(ref || {}) + ":" + (r.mt || "") + ":" + i;
+      const fetchOne = async () => {
+        const c = await api("doc.sheet", Object.assign({ i: i }, ref || {}));
+        if (!c || !c.pdf) throw new Error("Google не успел подготовить лист");
+        await docCachePut(ck, c);            /* в память кладём только целый лист: иначе пустышка застрянет навсегда */
+        return c;
+      };
       try {
-        const ck = "sh:" + JSON.stringify(ref || {}) + ":" + (r.mt || "") + ":" + i;
         let c = await docCacheGet(ck);
-        if (!c) { c = await api("doc.sheet", Object.assign({ i: i }, ref || {})); await docCachePut(ck, c); }
+        if (!c || !c.pdf) { try { c = await fetchOne(); } catch (e1) { c = await fetchOne(); } }   /* вторая попытка: первая часто упирается в таймаут Google */
         const buf = b64bytes(c.pdf).buffer;
         send({ mopoPdf: buf, i: i }, [buf]);
       } catch (err) { send({ mopoErr: String(err.message || err), i: i }); }
