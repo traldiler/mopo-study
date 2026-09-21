@@ -1463,6 +1463,12 @@ async function admSettings() {
     } catch (e) { fail(e); }
   });
 
+  /* подготовка копий уже идёт (страницу перерисовали) — показываем её ход и кнопку «Остановить» */
+  if (PREP.run) {
+    if ($("#prep")) $("#prep").textContent = PREP.stop ? "Останавливаем…" : "Остановить";
+    if ($("#prepres") && PREP.html) $("#prepres").innerHTML = PREP.html;
+    if ($("#prepall")) $("#prepall").checked = !!PREP.force;
+  }
   /* быстрый ответ: включено ли ночное обновление и что известно о копиях */
   (async () => {
     try {
@@ -1498,7 +1504,7 @@ async function admSettings() {
         ? `<b class="inl">Не готовы ${l.left} из ${l.total} листов.</b>` +
           (старые ? ` Копии устарели: ${старые}.` : "") + (l.ready != null ? " Готовых: " + l.ready + "." : "")
         : `Все ${l.total} листов готовы — сотрудники открывают таблицы сразу.`) +
-        (l.picsLeft ? `<br>Ждут фото: ${l.picsLeft} ${plural(l.picsLeft, "снимок", "снимка", "снимков")} на ${l.picSheets} ${plural(l.picSheets, "листе", "листах", "листах")}.` : "") +
+        (l.picsLeft ? `<br>Ждут фото: ${plural(l.picsLeft, "снимок", "снимка", "снимков")} на ${plural(l.picSheets, "листе", "листах", "листах")}.` : "") +
         (l.store === false ? ` <span class="hint tiny">Копии хранятся временно (около 6 часов): у сервиса нет разрешения сохранять файлы на Диск.</span>` : "");
     } catch (e) { /* не страшно: строка останется прежней */ }
   };
@@ -1511,11 +1517,15 @@ async function admSettings() {
   };
 
   $("#prep").onclick = async () => {
-    const b = $("#prep"), box = $("#prepres"), force = $("#prepall") && $("#prepall").checked;
-    if (PREP.run) { PREP.stop = true; b.textContent = "Останавливаем…"; return; }
-    PREP.run = true; PREP.stop = false;
-    b.textContent = "Остановить";
-    const t0 = Date.now();
+    const force = $("#prepall") && $("#prepall").checked;
+    if (PREP.run) { PREP.stop = true; $("#prep").textContent = "Останавливаем…"; return; }
+    PREP.run = true; PREP.stop = false; PREP.force = !!force;
+    $("#prep").textContent = "Остановить";
+    /* кнопку и поле ищем каждый раз заново: если страницу перерисовали, подготовка идёт дальше и видна на новой */
+    const b = { set textContent(t) { const x = $("#prep"); if (x) x.textContent = t; }, set disabled(v) { const x = $("#prep"); if (x) x.disabled = v; } };
+    const box = { set innerHTML(h) { PREP.html = h; const x = $("#prepres"); if (x) x.innerHTML = h; },
+                  insertAdjacentHTML(p, h) { const x = $("#prepres"); if (x) { x.insertAdjacentHTML(p, h); PREP.html = x.innerHTML; } } };
+    const t0 = Date.now(); let since = "";   /* время начала перепечатки пришлёт сервер */
     const mmss = ms => (ms >= 60000 ? Math.floor(ms / 60000) + " мин " : "") + Math.round(ms % 60000 / 1000) + " сек";
     let ready = 0, skip = 0, bad = [], total = 0, from = 0, last = "", pics = 0, picLast = "", picLeft = 0, plan = 0, more = true, rowsNote = "", note = "запрашиваем список листов…";
     let подряд = 0, молчит = false;                      /* сколько листов подряд сервер не ответил */
@@ -1538,7 +1548,7 @@ async function admSettings() {
         let r = null, tries = 0, err = null;
         while (!r && tries < 3) {
           tries++;
-          try { r = await api("admin.prepare", { from: from, count: 1, force: force }); }
+          try { r = await api("admin.prepare", { from: from, count: 1, force: force, since: since }); }
           catch (e) { err = e; note = "сервер не ответил, пробуем ещё раз (" + tries + " из 3)"; paint(); await new Promise(res => setTimeout(res, 1500 * tries)); }
         }
         if (!r) {                                         /* лист не дался три раза — пропускаем его и идём дальше */
@@ -1553,6 +1563,7 @@ async function admSettings() {
           continue;
         }
         подряд = 0;
+        if (r.since) since = r.since;
         more = !!r.more;
         total = r.total || total;
         (r.items || []).forEach(x => {

@@ -11,6 +11,7 @@ const APP = { user: null, token: localStorage.getItem("mopo-token") || "", scree
 const SWR = {};
 const SWR_READ = /^admin\.(users|students|attempts|attempt|questions|badges|materials|resets|examList|quizGet|examGet)$/;
 function swrRedraw() {
+  if (typeof PREP !== "undefined" && PREP.run) return;               /* идёт подготовка копий — страницу настроек не трогаем */
   const busy = document.querySelector(".modal-back, .viewer") || /INPUT|TEXTAREA|SELECT/.test((document.activeElement || {}).tagName || "");
   if (busy || !/^adm:/.test(APP.screen || "")) return;
   if (document.getElementById("alist") || document.getElementById("qelist") || document.getElementById("rtlist")) return;   /* открыт разбор попытки или редактор теста */
@@ -43,7 +44,7 @@ async function api(action, data) {
     SWR[key] = { v: v, at: Date.now() };
     return JSON.parse(JSON.stringify(v));
   }
-  if (/^admin\.|^question\./.test(action) && !/^admin\.(boot|retakes|retakeGet|retakeGenerate)$/.test(action)) {       /* что-то поменяли — списки перечитаем, когда сервер закончит */
+  if (/^admin\.|^question\./.test(action) && !/^admin\.(boot|retakes|retakeGet|retakeGenerate|prepare|prepStat|prepAutoStat|driveStatus|files|fileWho)$/.test(action)) {       /* что-то поменяли — списки перечитаем, когда сервер закончит */
     const r = await apiRaw(action, data);
     Object.keys(SWR).forEach(k => delete SWR[k]);
     if (isStaff(APP.user)) setTimeout(() => adminPrefetch(true), 300);
