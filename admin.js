@@ -1546,10 +1546,11 @@ async function admSettings() {
       do {
         note = "печатаем лист… первый лист большой таблицы может готовиться до минуты";
         let r = null, tries = 0, err = null;
-        while (!r && tries < 3) {
+        const попыток = picLeft ? 6 : 3;                 /* лист с фото тяжёлый — Google иногда не отвечает, пробуем упорнее */
+        while (!r && tries < попыток) {
           tries++;
           try { r = await api("admin.prepare", { from: from, count: 1, force: force, since: since }); }
-          catch (e) { err = e; note = "сервер не ответил, пробуем ещё раз (" + tries + " из 3)"; paint(); await new Promise(res => setTimeout(res, 1500 * tries)); }
+          catch (e) { err = e; note = "сервер не ответил, пробуем ещё раз (" + tries + " из " + попыток + ")"; paint(); await new Promise(res => setTimeout(res, 2000 * tries)); }
         }
         if (!r) {                                         /* лист не дался три раза — пропускаем его и идём дальше */
           bad.push("лист №" + (from + 1) + " в списке — " + ((err && err.message) || "сервер не ответил") +
@@ -1581,7 +1582,9 @@ async function admSettings() {
         from = r.next || 0;
       } while (more && !PREP.stop);        /* лист с фото возвращает тот же номер — идём по нему дальше */
       note = молчит ? "Сервер не отвечает — остановились. Проверьте связь и нажмите кнопку ещё раз: продолжим с этого места."
-           : PREP.stop ? "Остановлено. Нажмите кнопку ещё раз — продолжим с этого места." : "Готово.";
+           : PREP.stop ? "Остановлено. Нажмите кнопку ещё раз — продолжим с этого места."
+           : picLeft ? "Фото осталось " + picLeft + " — Google иногда не отвечает на тяжёлом листе. Нажмите кнопку ещё раз: продолжим с этого места, готовое не пропадёт."
+           : "Готово.";
       paint(); prepStat();
       if (bad.length) box.insertAdjacentHTML("beforeend",
         `<div class="note warn">Не удалось напечатать ${bad.length}:<ul>${bad.slice(0, 12).map(x => `<li>${esc(x)}</li>`).join("")}</ul></div>`);
