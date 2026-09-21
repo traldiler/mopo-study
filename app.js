@@ -280,12 +280,16 @@ function screenLogin() {
     const login = $("#lg").value.trim(), password = $("#pw").value;
     if (!login || !password) { $("#err").textContent = "Заполните оба поля."; $("#err").className = "hint bad"; return; }
     $("#go").disabled = true;
+    /* Google отвечает 3–6 секунд, иногда дольше — без надписи кажется, что кнопка просто зависла */
+    $("#err").textContent = "Проверяем логин и пароль…"; $("#err").className = "hint";
+    const долго = setTimeout(() => { if ($("#err")) $("#err").textContent = "Сервер Google сегодня отвечает дольше обычного — подождите ещё немного…"; }, 12000);
     try {
       const r = await api("login", { login: login, password: password });
       if (r.error) throw new Error(r.error);
       APP.token = r.token; APP.user = r.user; localStorage.setItem("mopo-token", r.token);
       start();
     } catch (e) { $("#err").textContent = e.message; $("#err").className = "hint bad"; $("#go").disabled = false; }   /* серую подсказку не замечали */
+    finally { clearTimeout(долго); }
   };
   $("#pweye").onclick = () => {
     const i = $("#pw"), show = i.type === "password";
@@ -363,7 +367,7 @@ async function logout(silent) {
   try { if (token && !APP.demo) await apiRaw("logout", { token: token }); } catch (_) { }
   APP.token = ""; APP.user = null; localStorage.removeItem("mopo-token");
   snapDrop(); PR.program = null; PR.progress = null; MAT_HEX = ""; MAT_KEY = null;
-  MYQ.data = null; MYQ.at = 0; PR.qOver = null; PR.examX = null;   /* чужие вопросы и тесты не должны достаться следующему */
+  MYQ.data = null; MYQ.at = 0; PR.qOver = null; PR.examX = null; MX.data = null;   /* чужие вопросы и тесты не должны достаться следующему */
   if (typeof QZ !== "undefined") { QZ.data = null; QZ.cur = null; }
   if (typeof EX !== "undefined" && !EX.running) EX.data = null;
   try { caches.delete(DOCC); } catch (e) { }
@@ -2318,11 +2322,27 @@ async function examGate() {
   $("#htitle").textContent = "Экзамен";
   $("#timer").hidden = true;
   $("#app").innerHTML = `<div class="card"><p class="lead">Проверяем доступ…</p></div>`;
+  /* история попыток идёт параллельно и не держит экран: экзамен показываем сразу, историю — когда придёт */
+  const fresh = myExams();
   try { await loadCabinet(); } catch (e) { return fail(e); }
-  let mx = { attempts: [], locked: false, retake: null, planned: null };
-  try { mx = await api("my.exams"); } catch (e) { /* сервер без истории попыток — показываем только экзамен */ }
   if (APP.screen !== "exam") return;
-  if (mx.retake) { await screenRetakeIntro(mx.retake); return examHistory(mx); }
+  const mx = MX.data && MX.user === APP.user.id ? MX.data : null;     /* из прошлого захода — пока свежая не пришла */
+  if (mx && mx.retake) { await screenRetakeIntro(mx.retake); examHistory(mx); }
+  else await examMain(mx);
+  fresh.then(nx => {
+    if (!nx || APP.screen !== "exam" || EX.running || JSON.stringify(nx) === JSON.stringify(mx)) return;
+    if (nx.retake || (mx && mx.retake)) return examGate();      /* пересдачу открыли или закрыли — перерисуем экран */
+    const old = document.querySelector(".exhist"); if (old) old.remove();
+    examHistory(nx);
+  });
+}
+const MX = { data: null, user: "", at: 0 };
+function myExams() {
+  return api("my.exams").then(x => { MX.data = x; MX.user = APP.user ? APP.user.id : ""; MX.at = Date.now(); return x; })
+    .catch(() => null);                                            /* сервер без истории попыток — показываем только экзамен */
+}
+async function examMain(mx) {
+  if (mx && mx.retake) { await screenRetakeIntro(mx.retake); return examHistory(mx); }
   const notReady = PR.program.blocks.filter(b => !blockStat(b).ready);
   const allowed = !!PR.progress.examAllowed, force = !!PR.progress.examForce;
   if (allowed && (!notReady.length || force)) {
