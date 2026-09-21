@@ -587,6 +587,12 @@ async function screenCabinet(keep) {
 
 /* ---------- экран одного блока ---------- */
 function openBlock(n, focusLesson, subIndex) {
+  /* связь могла оборваться на загрузке — тогда данных нет, и переход падал с ошибкой */
+  if (!PR.program || !PR.progress) {
+    $("#app").innerHTML = `<div class="card"><p class="lead">Загружаем кабинет…</p></div>`;
+    return loadCabinet(true).then(() => openBlock(n, focusLesson, subIndex))
+      .catch(e => { fail(e); screenCabinet(); });
+  }
   PR.block = n;
   const b = PR.program.blocks.filter(x => x.n === n)[0];
   if (!b) return screenCabinet();
@@ -1092,12 +1098,23 @@ function pdfScroll(toc, tabs, note) {
       COLORS.map(function(c,i){ return c?'<button type="button" class="dot" data-c="'+i+'" style="background:'+c+'" title="Маркер"></button>':""; }).join("");
     function selText(){ var s=window.getSelection(); return s&&!s.isCollapsed?String(s).replace(/\\s+/g," ").trim():""; }
     function hideBar(){ bar.classList.remove("on"); }
-    document.addEventListener("mouseup",function(){ setTimeout(function(){
+    function showBar(снизу){
       var t=selText(); if(t.length<2){ hideBar(); return; }
-      var r=window.getSelection().getRangeAt(0).getBoundingClientRect();
+      var s=window.getSelection(); if(!s.rangeCount){ hideBar(); return; }
+      var r=s.getRangeAt(0).getBoundingClientRect();
       bar.style.left=Math.max(8,Math.min(window.innerWidth-260,r.left))+"px";
-      bar.style.top=Math.max(8,r.top-44)+"px"; bar.classList.add("on");
-    },10); });
+      /* на телефоне сверху стоит меню «Копировать» — нашу панель уводим под текст */
+      bar.style.top=(снизу && r.bottom+52<window.innerHeight ? r.bottom+12 : Math.max(8,r.top-44))+"px";
+      bar.classList.add("on");
+    }
+    document.addEventListener("mouseup",function(){ setTimeout(function(){ showBar(false); },10); });
+    var тач=false, тачТаймер=null;
+    document.addEventListener("touchstart",function(){ тач=true; },{passive:true});
+    document.addEventListener("selectionchange",function(){        /* палец: мышиных событий нет */
+      if(!тач) return;
+      clearTimeout(тачТаймер);
+      тачТаймер=setTimeout(function(){ showBar(true); },400);
+    });
     sc.addEventListener("scroll",hideBar);
     bar.addEventListener("click",function(e){
       var b=e.target.closest("button"); if(!b) return;
@@ -1351,6 +1368,51 @@ const SHIM_JS = `<script>(function(){
           if(/(docs\\.google\\.com|drive\\.google\\.com)/.test(h)) parent.postMessage({mopo:"opendoc",url:h},"*");
           else window.open(h,"_blank","noopener"); }
       },true);
+    })();
+    /* выделение пальцем: на телефоне мышиных событий нет, поэтому панель маркера
+       показываем по самому выделению — и ставим её ПОД текстом, чтобы не спорить
+       с меню «Копировать» самого телефона */
+    (function(){
+      var тач=false, таймер=null;
+      document.addEventListener("touchstart",function(){ тач=true; },{passive:true});
+      function убрать(){ var o=document.querySelector(".qpop.touch"); if(o) o.remove(); }
+      function показать(){
+        var s=window.getSelection(), t=s?String(s).trim():"";
+        убрать();
+        if(!t || t.length<3 || !s.rangeCount) return;
+        var r=s.getRangeAt(0).getBoundingClientRect();
+        if(!r || (!r.width && !r.height)) return;
+        var цвета=["","#FFE070","#8EDDA4","#9CC4FF","#FFA9C9","#FFBE7D"];
+        var p=document.createElement("div");
+        p.className="qpop touch";
+        p.style.cssText="position:fixed;z-index:99;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:8px;"+
+          "background:#232227;padding:9px 12px;border-radius:24px;box-shadow:0 10px 26px rgba(35,34,39,.35);max-width:94vw";
+        var html="";
+        for(var c=1;c<=5;c++) html+='<button type="button" data-c="'+c+'" aria-label="маркер" style="width:26px;height:26px;border-radius:50%;'+
+          'border:2px solid #fff;padding:0;cursor:pointer;background:'+цвета[c]+'"></button>';
+        html+='<span style="width:1px;height:20px;background:#55545B"></span>'+
+          '<button type="button" data-q="1" style="background:none;border:0;color:#fff;font:700 14px/1 inherit;padding:6px 8px;cursor:pointer">Заметка</button>';
+        p.innerHTML=html;
+        var ниже=r.bottom+12, поместится=ниже+56<window.innerHeight;
+        p.style.top=(поместится?ниже:Math.max(8,r.top-64))+"px";
+        p.addEventListener("touchstart",function(ev){ ev.stopPropagation(); },{passive:true});
+        Array.prototype.forEach.call(p.querySelectorAll("button"),function(b){
+          b.addEventListener("click",function(ev){
+            ev.preventDefault(); ev.stopPropagation();
+            var цвет=b.getAttribute("data-c");
+            try{ window.getSelection().removeAllRanges(); }catch(e){}
+            parent.postMessage(цвет?{mopo:"hl",text:t,color:Number(цвет)}:{mopo:"quote",text:t},"*");
+            убрать();
+          });
+        });
+        document.body.appendChild(p);
+      }
+      document.addEventListener("selectionchange",function(){
+        if(!тач) return;
+        clearTimeout(таймер);
+        таймер=setTimeout(показать,400);              /* ждём, пока человек доведёт ползунки */
+      });
+      document.addEventListener("scroll",убрать,true);
     })();<\/script>`;
 function openLesson(l, at, quote) {
   PR.progress.lastLesson = l.id;
@@ -1365,7 +1427,8 @@ function openLesson(l, at, quote) {
     else toast("Браузер не дал открыть вкладку — разрешите всплывающие окна для этого сайта");
     return;
   }
-  const v = el("div", "viewer split");
+  const узкийЭкран = window.innerWidth < 900;              /* телефон: заметки открываются кнопкой, иначе материал не читается */
+  const v = el("div", "viewer split" + (узкийЭкран ? " nonotes" : ""));
   const gk = APP.demo ? "" : gdocKind(l), proxied = !!gk;                 /* документ Google — копией через сервер */
   const video = l.kind === "видео", inner = isInternal(l.url), framed = inner || proxied;
   const textual = /^konspekt\//.test(String(l.url)) || gk === "doc" || gk === "sheet";   /* маркер и цитаты: конспекты, документы и таблицы */
@@ -1375,12 +1438,12 @@ function openLesson(l, at, quote) {
   v.innerHTML = `<div class="vhead"><b>${esc(l.title)}</b>
       <button type="button" data-a="docback" class="back" hidden></button>
       ${framed ? "" : '<button type="button" data-a="newtab" class="quiet">Открыть в новой вкладке ↗</button>'}
-      <button type="button" data-a="notes" class="on first">Заметки</button>
-      <button type="button" data-a="ask">${isStaff(APP.user) ? "Вопрос разработчику" : "Спросить РОПа"}</button>
+      <button type="button" data-a="notes" class="${узкийЭкран ? "" : "on "}first">Заметки</button>
+      <button type="button" data-a="ask">${узкийЭкран ? "Вопрос" : (isStaff(APP.user) ? "Вопрос разработчику" : "Спросить РОПа")}</button>
       <button type="button" data-a="bm" class="bm"></button>
       <button type="button" data-a="close">Закрыть</button></div>
     <div class="vbody">
-      <iframe ${framed ? "" : `src="${esc(src)}"`} allow="autoplay; fullscreen" ${framed ? "" : 'referrerpolicy="no-referrer"'}></iframe>
+      <iframe ${framed ? "" : `src="${esc(src)}"`} allow="autoplay; fullscreen" allowfullscreen webkitallowfullscreen ${framed ? "" : 'referrerpolicy="no-referrer"'}></iframe>
       <aside class="vnotes">
         ${textual ? `<div class="seg"><button type="button" data-tab="note">Заметки <i></i></button><button type="button" data-tab="hl">Выделения <i></i></button></div>`
                   : "<h4>Заметки к материалу</h4>"}
@@ -1459,7 +1522,9 @@ function openLesson(l, at, quote) {
   const paintBm = () => {
     const on = notesOf(l.id).some(n => n.kind === "bm");
     const b = v.querySelector('[data-a="bm"]');
-    b.textContent = on ? "★ В закладках" : "☆ В закладки"; b.classList.toggle("on", on);
+    b.textContent = window.innerWidth < 900 ? (on ? "★" : "☆") : (on ? "★ В закладках" : "☆ В закладки");
+    b.title = on ? "Убрать из закладок" : "В закладки";
+    b.classList.toggle("on", on);
   };
   v.querySelector('[data-a="bm"]').onclick = async () => { await toggleBookmark(l); paintBm(); };
   paintBm();
@@ -1534,6 +1599,7 @@ function openLesson(l, at, quote) {
       showTab("note");
       const ta = v.querySelector(".ntext");
       ta.dataset.quote = d.text; ta.focus();
+      if (window.innerWidth < 900) setTimeout(() => { try { ta.scrollIntoView({ block: "center", behavior: "smooth" }); } catch (e) { } }, 60);
       v.querySelector(".qprev") && v.querySelector(".qprev").remove();
       ta.insertAdjacentHTML("beforebegin", `<div class="nquote qprev"><span>«${esc(d.text)}»</span>
         <button type="button" class="qx" title="Убрать цитату">×</button></div>`);
