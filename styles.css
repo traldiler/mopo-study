@@ -1681,3 +1681,12 @@ label.f{font-family:var(--f-text); font-size:13px; font-weight:600; letter-spaci
     box-shadow:0 -10px 14px 6px #fff;}
   .modal .mbtns button{flex:1; min-height:44px;}
 }
+
+/* «Развернуть» на телефоне: материал занимает весь экран, кнопка возврата остаётся сверху */
+.viewer.big{padding:0;}
+.viewer.big .vhead{position:fixed; top:calc(env(safe-area-inset-top,0px) + 6px); right:8px; left:auto; z-index:62; margin:0; gap:6px;}
+.viewer.big .vhead b, .viewer.big .vhead button:not([data-a="big"]):not([data-a="close"]){display:none;}
+.viewer.big .vhead button{padding:8px 12px; font-size:12.5px; opacity:.94;}
+.viewer.big .vbody{gap:0;}
+.viewer.big .vnotes{display:none;}
+.viewer.big iframe{border-radius:0; height:100%; flex:1 1 auto !important;}   /* в развёрнутом виде материал занимает весь экран */

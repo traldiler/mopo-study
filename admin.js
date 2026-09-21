@@ -815,10 +815,17 @@ function lessonForm(l, d) {
     if (data.ready && !data.url) { toast("У готового материала нужна ссылка. Или снимите «Материал готов»"); return; }
     const btn = $$('[data-a="1"]'); btn.disabled = true; btn.textContent = "Сохраняем…";   /* сервер думает несколько секунд — повторно не нажать */
     try {
+      /* считаем ДО правки своей копии: иначе сравнивать уже не с чем */
+      const переставили = !l || (data.after && data.after !== "keep") ||
+                          String(l.sub || "") !== String(data.sub || "") || Number(l.block) !== Number(data.block);
       const r = await api("admin.lessonSave", { data: data });
       const fields = { block: data.block, sub: data.sub, title: data.title, kind: data.kind, url: data.url, note: data.note, ready: data.ready, active: data.active };
       if (l) Object.assign(l, fields); else d.lessons.push(Object.assign({ id: r.id, order: 99999, createdBy: APP.user.id }, fields));
-      close(); PR.program = null; admMaterials(d); toast("Сохранено");
+      close(); PR.program = null;
+      /* порядок пересчитывает сервер: со своей копией список остался бы в прежнем виде,
+         и казалось бы, что перенос не сохранился */
+      if (переставили) admMaterials(); else admMaterials(d);
+      toast(переставили && l ? "Сохранено — материал на новом месте" : "Сохранено");
     } catch (e) { btn.disabled = false; btn.textContent = "Сохранить"; fail(e); }
   });
 }

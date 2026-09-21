@@ -1102,9 +1102,14 @@ function pdfScroll(toc, tabs, note) {
       var t=selText(); if(t.length<2){ hideBar(); return; }
       var s=window.getSelection(); if(!s.rangeCount){ hideBar(); return; }
       var r=s.getRangeAt(0).getBoundingClientRect();
-      bar.style.left=Math.max(8,Math.min(window.innerWidth-260,r.left))+"px";
-      /* на телефоне сверху стоит меню «Копировать» — нашу панель уводим под текст */
-      bar.style.top=(снизу && r.bottom+52<window.innerHeight ? r.bottom+12 : Math.max(8,r.top-44))+"px";
+      if(снизу){                                    /* палец: меню телефона рядом с выделением — уходим вниз экрана */
+        bar.style.left="50%"; bar.style.transform="translateX(-50%)";
+        bar.style.top="auto"; bar.style.bottom="calc(16px + env(safe-area-inset-bottom, 0px))";
+      } else {
+        bar.style.transform=""; bar.style.bottom="auto";
+        bar.style.left=Math.max(8,Math.min(window.innerWidth-260,r.left))+"px";
+        bar.style.top=Math.max(8,r.top-44)+"px";
+      }
       bar.classList.add("on");
     }
     document.addEventListener("mouseup",function(){ setTimeout(function(){ showBar(false); },10); });
@@ -1393,8 +1398,9 @@ const SHIM_JS = `<script>(function(){
         html+='<span style="width:1px;height:20px;background:#55545B"></span>'+
           '<button type="button" data-q="1" style="background:none;border:0;color:#fff;font:700 14px/1 inherit;padding:6px 8px;cursor:pointer">Заметка</button>';
         p.innerHTML=html;
-        var ниже=r.bottom+12, поместится=ниже+56<window.innerHeight;
-        p.style.top=(поместится?ниже:Math.max(8,r.top-64))+"px";
+        /* меню «Копировать» айфон рисует вплотную к выделению, поэтому нашу панель держим у нижнего края */
+        p.style.bottom="calc(16px + env(safe-area-inset-bottom, 0px))";
+        p.style.top="auto";
         p.addEventListener("touchstart",function(ev){ ev.stopPropagation(); },{passive:true});
         Array.prototype.forEach.call(p.querySelectorAll("button"),function(b){
           b.addEventListener("click",function(ev){
@@ -1438,6 +1444,7 @@ function openLesson(l, at, quote) {
   v.innerHTML = `<div class="vhead"><b>${esc(l.title)}</b>
       <button type="button" data-a="docback" class="back" hidden></button>
       ${framed ? "" : '<button type="button" data-a="newtab" class="quiet">Открыть в новой вкладке ↗</button>'}
+      ${узкийЭкран && (video || framed) ? '<button type="button" data-a="big">⤢ Развернуть</button>' : ""}
       <button type="button" data-a="notes" class="${узкийЭкран ? "" : "on "}first">Заметки</button>
       <button type="button" data-a="ask">${узкийЭкран ? "Вопрос" : (isStaff(APP.user) ? "Вопрос разработчику" : "Спросить РОПа")}</button>
       <button type="button" data-a="bm" class="bm"></button>
@@ -1529,6 +1536,13 @@ function openLesson(l, at, quote) {
   v.querySelector('[data-a="bm"]').onclick = async () => { await toggleBookmark(l); paintBm(); };
   paintBm();
   v.querySelector('[data-a="ask"]').onclick = () => askRop(l);
+  const big = v.querySelector('[data-a="big"]');          /* во весь экран: у плеера Google свои кнопки работают через раз */
+  if (big) big.onclick = () => {
+    const на = !v.classList.contains("big");
+    v.classList.toggle("big", на);
+    big.textContent = на ? "⤡ Свернуть" : "⤢ Развернуть";
+    if (на) toast("Поверните телефон боком — видео займёт весь экран");
+  };
   v.querySelector('[data-a="notes"]').onclick = () => {
     v.classList.toggle("nonotes");
     v.querySelector('[data-a="notes"]').classList.toggle("on", !v.classList.contains("nonotes"));
