@@ -13,7 +13,7 @@ const SWR_READ = /^admin\.(users|students|attempts|attempt|questions|badges|mate
 function swrRedraw() {
   const busy = document.querySelector(".modal-back, .viewer") || /INPUT|TEXTAREA|SELECT/.test((document.activeElement || {}).tagName || "");
   if (busy || !/^adm:/.test(APP.screen || "")) return;
-  if (document.getElementById("alist") || document.getElementById("qelist")) return;   /* открыт разбор попытки или редактор теста */
+  if (document.getElementById("alist") || document.getElementById("qelist") || document.getElementById("rtlist")) return;   /* открыт разбор попытки или редактор теста */
   const y = window.scrollY;
   if (ADM.tab === "materials" && $("#ltbl")) admMaterials();          /* список остаётся на экране, пока готовится новый */
   else screenAdmin();
@@ -43,7 +43,7 @@ async function api(action, data) {
     SWR[key] = { v: v, at: Date.now() };
     return JSON.parse(JSON.stringify(v));
   }
-  if (/^admin\.|^question\./.test(action) && action !== "admin.boot") {       /* что-то поменяли — списки перечитаем, когда сервер закончит */
+  if (/^admin\.|^question\./.test(action) && !/^admin\.(boot|retakes|retakeGet|retakeGenerate)$/.test(action)) {       /* что-то поменяли — списки перечитаем, когда сервер закончит */
     const r = await apiRaw(action, data);
     Object.keys(SWR).forEach(k => delete SWR[k]);
     if (isStaff(APP.user)) setTimeout(() => adminPrefetch(true), 300);
@@ -53,7 +53,7 @@ async function api(action, data) {
 }
 async function apiRaw(action, data) {
   /* сервер Google иногда отвечает сбоем вместо данных — чтение повторяем сами, запись не дублируем */
-  const safe = /^(boot|program|progress\.get|me|my\.questions|mat\.key|quiz\.overrides|exam\.extra|quiz\.review|doc\.get|doc\.sheet|admin\.(users|students|attempts|attempt|questions|badges|materials|resets|examList|examGet|quizGet))$/.test(action);
+  const safe = /^(boot|program|progress\.get|me|my\.questions|mat\.key|quiz\.overrides|exam\.extra|quiz\.review|doc\.get|doc\.sheet|my\.exams|my\.report|retake\.start|admin\.(retakes|retakeGet|users|students|attempts|attempt|questions|badges|materials|resets|examList|examGet|quizGet))$/.test(action);
   let j = null;
   for (let tryN = 0; tryN < (safe ? 3 : 1); tryN++) {
     try {
@@ -360,7 +360,7 @@ async function logout(silent) {
   if (!silent && !await ask({ title: "Выйти из кабинета", ok: "Выйти", text: "Прогресс сохранён — войдёте снова и продолжите." })) return;
   const token = APP.token;
   APP.token = "";                                                  /* гасим токен до запроса: иначе ответ «сессия истекла» позовёт выход ещё раз */
-  try { if (token) await apiRaw("logout", { token: token }); } catch (_) { }
+  try { if (token && !APP.demo) await apiRaw("logout", { token: token }); } catch (_) { }
   APP.token = ""; APP.user = null; localStorage.removeItem("mopo-token");
   snapDrop(); PR.program = null; PR.progress = null; MAT_HEX = ""; MAT_KEY = null;
   MYQ.data = null; MYQ.at = 0; PR.qOver = null; PR.examX = null;   /* чужие вопросы и тесты не должны достаться следующему */
@@ -394,10 +394,10 @@ const qSeenKey = () => "mopo-qseen-" + (APP.user ? APP.user.id : "x");
 function qSeen() {
   try { return new Set(JSON.parse(localStorage.getItem(qSeenKey()) || "[]")); } catch (e) { return new Set(); }
 }
-function qFresh() {                                    /* ответы, которых сотрудник ещё не видел */
+function qFresh() {                                    /* ответы, которых сотрудник ещё не видел — ни на одном устройстве */
   const list = (MYQ.data && MYQ.data.questions) || [];
   const seen = qSeen();
-  return list.filter(q => q.answer && !seen.has(String(q.id)));
+  return list.filter(q => q.answer && !q.seenAt && !seen.has(String(q.id)));
 }
 function qMarkSeen() {
   const list = (MYQ.data && MYQ.data.questions) || [];
@@ -496,7 +496,8 @@ function blockStat(b) {
 }
 function openMap() {
   const out = {}; let allow = true;
-  if (isStaff(APP.user)) { PR.program.blocks.forEach(b => out[b.n] = true); return out; }
+  /* РОП/разработчик и действующий МОПО (статус «Работает») видят все блоки сразу */
+  if (isStaff(APP.user) || (APP.user && APP.user.stage === "work")) { PR.program.blocks.forEach(b => out[b.n] = true); return out; }
   PR.program.blocks.forEach(b => { out[b.n] = allow; if (!blockStat(b).opens) allow = false; });
   return out;
 }
@@ -1421,9 +1422,12 @@ const SHIM_JS = `<script>(function(){
       document.addEventListener("scroll",убрать,true);
     })();<\/script>`;
 function openLesson(l, at, quote) {
-  PR.progress.lastLesson = l.id;
-  LOC.l = l.id;
-  save("lesson.open", { lessonId: l.id });
+  const own = !!l.html;                                  /* своя страница кабинета (разбор экзамена): не урок программы */
+  if (!own) {
+    PR.progress.lastLesson = l.id;
+    LOC.l = l.id;
+    save("lesson.open", { lessonId: l.id });
+  }
   /* сайты, которые запрещают показывать себя внутри чужих страниц, — сразу отдельной вкладкой.
      Авито и Дром разрешают — они открываются внутри, с заметками сбоку и кнопкой «в новой вкладке» */
   if (l.kind === "сайт" && NOFRAME.test(String(l.url))) {
@@ -1436,8 +1440,8 @@ function openLesson(l, at, quote) {
   const узкийЭкран = window.innerWidth < 900;              /* телефон: заметки открываются кнопкой, иначе материал не читается */
   const v = el("div", "viewer split" + (узкийЭкран ? " nonotes" : ""));
   const gk = APP.demo ? "" : gdocKind(l), proxied = !!gk;                 /* документ Google — копией через сервер */
-  const video = l.kind === "видео", inner = isInternal(l.url), framed = inner || proxied;
-  const textual = /^konspekt\//.test(String(l.url)) || gk === "doc" || gk === "sheet";   /* маркер и цитаты: конспекты, документы и таблицы */
+  const video = l.kind === "видео", inner = !own && isInternal(l.url), framed = inner || proxied || own;
+  const textual = own || /^konspekt\//.test(String(l.url)) || gk === "doc" || gk === "sheet";   /* маркер и цитаты: конспекты, документы и таблицы */
   const slides = /docs\.google\.com\/presentation\//.test(String(l.url));
   const src = inner ? l.url : driveEmbed(l.url);
   let tab = quote && notesOf(l.id).some(n => isHl(n) && n.quote === quote) ? "hl" : "note";
@@ -1446,8 +1450,8 @@ function openLesson(l, at, quote) {
       ${framed ? "" : '<button type="button" data-a="newtab" class="quiet">Открыть в новой вкладке ↗</button>'}
       ${узкийЭкран && (video || framed) ? '<button type="button" data-a="big">⤢ Развернуть</button>' : ""}
       <button type="button" data-a="notes" class="${узкийЭкран ? "" : "on "}first">Заметки</button>
-      <button type="button" data-a="ask">${узкийЭкран ? "Вопрос" : (isStaff(APP.user) ? "Вопрос разработчику" : "Спросить РОПа")}</button>
-      <button type="button" data-a="bm" class="bm"></button>
+      ${own ? "" : `<button type="button" data-a="ask">${узкийЭкран ? "Вопрос" : (isStaff(APP.user) ? "Вопрос разработчику" : "Спросить РОПа")}</button>
+      <button type="button" data-a="bm" class="bm"></button>`}
       <button type="button" data-a="close">Закрыть</button></div>
     <div class="vbody">
       <iframe ${framed ? "" : `src="${esc(src)}"`} allow="autoplay; fullscreen" allowfullscreen webkitallowfullscreen ${framed ? "" : 'referrerpolicy="no-referrer"'}></iframe>
@@ -1496,7 +1500,7 @@ function openLesson(l, at, quote) {
   const showTop = async () => {
     const top = chain[chain.length - 1], fr = v.querySelector("iframe");
     paintChain();
-    if (!top.url) { if (inner) loadInner(fr, l.url); else loadDoc(fr, l); return; }
+    if (!top.url) { if (own) fr.srcdoc = docInject(l.html, true); else if (inner) loadInner(fr, l.url); else loadDoc(fr, l); return; }
     const r = await loadDocUrl(fr, top.url, top.title);
     if (r && r.title && r.title !== top.title) { top.title = r.title; paintChain(); }
   };
@@ -1533,9 +1537,11 @@ function openLesson(l, at, quote) {
     b.title = on ? "Убрать из закладок" : "В закладки";
     b.classList.toggle("on", on);
   };
-  v.querySelector('[data-a="bm"]').onclick = async () => { await toggleBookmark(l); paintBm(); };
-  paintBm();
-  v.querySelector('[data-a="ask"]').onclick = () => askRop(l);
+  if (!own) {
+    v.querySelector('[data-a="bm"]').onclick = async () => { await toggleBookmark(l); paintBm(); };
+    paintBm();
+    v.querySelector('[data-a="ask"]').onclick = () => askRop(l);
+  }
   const big = v.querySelector('[data-a="big"]');          /* во весь экран: у плеера Google свои кнопки работают через раз */
   if (big) big.onclick = () => {
     const на = !v.classList.contains("big");
@@ -1606,6 +1612,7 @@ function openLesson(l, at, quote) {
       if (quote) setTimeout(() => post({ mopo: "focus", text: quote }), 250);
     }
     if (d.mopo === "opendoc") { openDocUrl(d.url); return; }
+    if (d.mopo === "openlesson" && own) { openLessonById(d.id); return; }    /* «где посмотреть» в разборе — урок поверх разбора */
     if (d.mopo === "quote") {
       if (v.classList.contains("nonotes")) {           /* панель была спрятана — показываем, иначе заметка «пропадёт» */
         v.classList.remove("nonotes"); v.querySelector('[data-a="notes"]').classList.add("on");
@@ -1676,7 +1683,8 @@ function openLesson(l, at, quote) {
   };
   draw(); showTab(textual ? tab : "note");
   document.body.appendChild(v); lockScroll(true);
-  if (inner) loadInner(v.querySelector("iframe"), l.url);
+  if (own) v.querySelector("iframe").srcdoc = docInject(l.html, true);
+  else if (inner) loadInner(v.querySelector("iframe"), l.url);
   else if (proxied) loadDoc(v.querySelector("iframe"), l);
 }
 
@@ -1824,9 +1832,15 @@ async function screenQuestions() {
   const list = (r.questions || []).slice().sort((a, b) => String(b.at).localeCompare(String(a.at)));
   const nAns = list.filter(q => q.answer).length, nWait = list.length - nAns;
   const ВИДЕЛ = qSeen();                               /* что уже открывали — до отметки ниже */
+  list.forEach(q => { if (q.seenAt) ВИДЕЛ.add(String(q.id)); });   /* прочитано на другом устройстве */
   const плюрал = n => plural(n, "новый ответ", "новых ответа", "новых ответов");
   const новых = list.filter(q => q.answer && !ВИДЕЛ.has(String(q.id))).length;
   qMarkSeen(); renderNav();                            /* зашли — значок в меню гаснет */
+  if (новых && !APP.demo) {                            /* и на сервере — чтобы не загорался на телефоне или ноутбуке */
+    const now = new Date().toISOString();
+    (MYQ.data && MYQ.data.questions || []).forEach(q => { if (q.answer && !q.seenAt) q.seenAt = now; });
+    apiRaw("question.seen", {}).catch(() => { });
+  } else if (новых && APP.demo) api("question.seen", {}).catch(() => { });
   $("#app").innerHTML = `<div class="card">
       <div class="qhead"><div><h2>${staff ? "Вопросы разработчику" : "Мои вопросы"}</h2>
         <p class="lead">${staff ? "Что-то не работает, нужна доработка или новый раздел — напишите здесь. Ответ придёт сюда же."
@@ -2305,11 +2319,16 @@ async function examGate() {
   $("#timer").hidden = true;
   $("#app").innerHTML = `<div class="card"><p class="lead">Проверяем доступ…</p></div>`;
   try { await loadCabinet(); } catch (e) { return fail(e); }
+  let mx = { attempts: [], locked: false, retake: null, planned: null };
+  try { mx = await api("my.exams"); } catch (e) { /* сервер без истории попыток — показываем только экзамен */ }
+  if (APP.screen !== "exam") return;
+  if (mx.retake) { await screenRetakeIntro(mx.retake); return examHistory(mx); }
   const notReady = PR.program.blocks.filter(b => !blockStat(b).ready);
   const allowed = !!PR.progress.examAllowed, force = !!PR.progress.examForce;
   if (allowed && (!notReady.length || force)) {
     if (force && notReady.length) toast("Руководитель открыл экзамен досрочно: часть блоков ещё не закрыта.");
-    return screenExamIntro();
+    await screenExamIntro();
+    return examHistory(mx);
   }
   $("#app").innerHTML = `<div class="card"><h2>Экзамен пока закрыт</h2>
     <p class="lead">К экзамену допускают, когда выполнены оба условия.</p>
@@ -2321,6 +2340,52 @@ async function examGate() {
     </div>
     <div class="foot"><button class="btn ghost" id="gback" type="button">К обучению</button></div></div>`;
   $("#gback").onclick = () => go("cabinet");
+  examHistory(mx);
+}
+
+/* ---------- мои попытки: экзамен и пересдачи отдельными вкладками, разбор — когда руководитель отправил ---------- */
+const EXH = { tab: "exam" };
+function examHistory(mx) {
+  const list = (mx && mx.attempts) || [];
+  if (!list.length && !(mx && mx.planned)) return;
+  const ex = list.filter(a => a.kind !== "retake"), rt = list.filter(a => a.kind === "retake");
+  if (!rt.length) EXH.tab = "exam";
+  const c = el("div", "card exhist");
+  const vcls = v => v === "сдал" ? "ok" : v === "пересдача" ? "retry" : "fail";
+  const draw = () => {
+    const rows = EXH.tab === "retake" ? rt : ex, word = EXH.tab === "retake" ? "Пересдача" : "Попытка";
+    c.innerHTML = `<div class="qhead"><div><h2>Мои попытки</h2>
+        <p class="lead">Экзамен — ${plural(ex.length, "попытка", "попытки", "попыток")}${rt.length ? ", пересдачи — " + rt.length : ""}.</p></div></div>
+      ${mx.planned ? `<div class="note"><b>Руководитель назначил пересдачу.</b> Она откроется здесь ${esc(new Date(mx.planned.opensAt).toLocaleDateString("ru-RU", { day: "numeric", month: "long" }))}.</div>` : ""}
+      ${rt.length ? `<div class="seg wide" id="exhseg"><button type="button" data-t="exam">Экзамен <i>${ex.length}</i></button>
+        <button type="button" data-t="retake">Пересдачи <i>${rt.length}</i></button></div>` : ""}
+      <div class="exrows">${rows.length ? rows.map((a, i) => `<div class="exrow">
+          <div class="exw"><b>${word} ${rows.length - i}</b><small>${esc(new Date(a.finishedAt).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }))}</small></div>
+          <div class="exp"><b>${a.percent}%</b><span class="tag ${vcls(a.verdict)}">${esc(a.verdict)}</span></div>
+          <div class="exa">${mx.locked ? '<span class="hint">разбор откроется после пересдачи</span>'
+            : a.sent ? `<button class="btn small" data-rep="${esc(a.id)}" type="button">Разбор ошибок</button>`
+            : '<span class="hint">разбор ещё не отправлен</span>'}</div></div>`).join("")
+        : '<p class="hint">Пока нет.</p>'}</div>`;
+    c.querySelectorAll("[data-t]").forEach(b => { b.classList.toggle("on", b.dataset.t === EXH.tab); b.onclick = () => { EXH.tab = b.dataset.t; draw(); }; });
+    c.querySelectorAll("[data-rep]").forEach(b => b.onclick = once(() => openReport(b.dataset.rep)));
+  };
+  draw();
+  $("#app").appendChild(c);
+}
+/* разбор в кабинете: только просмотр, заметки и выделения — без скачивания */
+async function openReport(id) {
+  let r;
+  try { r = await api("my.report", { id: id }); if (!PR.program) PR.program = await api("program"); } catch (e) { return fail(e); }
+  r.fio = r.fio || (APP.user && APP.user.fio) || "";
+  const p = reportParts(r, "feedback", { inApp: true });
+  /* ссылки «где посмотреть» ведут в урок кабинета; ловим раньше общего обработчика ссылок */
+  const link = `<script>window.addEventListener("click",function(e){var a=e.target.closest&&e.target.closest("a[data-l]");if(!a)return;
+    e.preventDefault();e.stopPropagation();parent.postMessage({mopo:"openlesson",id:a.getAttribute("data-l")},"*");},true);<\/script>`;
+  const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+    <style>body{margin:0;background:#fff}.rpaper{max-width:820px;margin:0 auto;padding:22px 18px 60px}${p.css}</style></head>
+    <body><div class="rpaper">${p.head}${p.body}</div>${link}</body></html>`;
+  openLesson({ id: "rep:" + r.id, title: (r.kind === "retake" ? "Разбор пересдачи" : "Разбор экзамена") + " · " + new Date(r.finishedAt).toLocaleDateString("ru-RU"),
+               kind: "конспект", html: html });
 }
 
 /* ---------- запуск ---------- */
@@ -2408,9 +2473,10 @@ try {                                              /* демо помнит за
     }
     DEMO.resets = DEMO.resets || [];
   }
+  DEMO.retakes = DEMO.retakes || [];
 } catch (e) { /* хранилище недоступно — демо просто начнётся заново */ }
 function demoKeep() {
-  try { localStorage.setItem(DEMO_KEY, JSON.stringify({ users: DEMO.users, state: DEMO.state, questions: DEMO.questions, attempts: DEMO.attempts, matOps: DEMO.matOps, resets: DEMO.resets, settings: DEMO.settings, quizEdits: DEMO.quizEdits, examExtra: DEMO.examExtra, cleanTest: true })); }
+  try { localStorage.setItem(DEMO_KEY, JSON.stringify({ users: DEMO.users, state: DEMO.state, questions: DEMO.questions, attempts: DEMO.attempts, retakes: DEMO.retakes, matOps: DEMO.matOps, resets: DEMO.resets, settings: DEMO.settings, quizEdits: DEMO.quizEdits, examExtra: DEMO.examExtra, cleanTest: true })); }
   catch (e) { /* не страшно */ }
 }
 const demoMe = () => DEMO.users[DEMO.who];
@@ -2568,6 +2634,146 @@ function demoPressesDone(userId) {
   st.pressesDone = true;
   demoKeep();
 }
+/* план пересдачи в демо — те же функции, что на сервере */
+function demoGid(url) {
+  const u = String(url || '');
+  let m = u.match(/docs\.google\.com\/(document|spreadsheets|presentation)\/d\/([A-Za-z0-9_-]+)/);
+  if (m) return { type: m[1], id: m[2] };
+  m = u.match(/drive\.google\.com\/file\/d\/([A-Za-z0-9_-]+)/) || u.match(/drive\.google\.com\/open\?id=([A-Za-z0-9_-]+)/);
+  if (m) return { type: 'file', id: m[1] };
+  return null;
+}
+/* делим count между кусками пропорционально весу, но не больше вместимости каждого (метод наибольших остатков) */
+function demoRtShare(items, count) {
+  const res = items.map(() => 0);
+  let left = count, active = items.map((x, i) => i).filter(i => items[i].cap > 0 && items[i].w > 0);
+  while (left > 0 && active.length) {
+    const W = active.reduce((t, i) => t + items[i].w, 0);
+    const exact = active.map(i => left * items[i].w / W);
+    const give = active.map((i, k) => Math.min(items[i].cap - res[i], Math.floor(exact[k])));
+    let used = give.reduce((a, b) => a + b, 0);
+    const byRest = active.map((i, k) => k).sort((a, b) => (exact[b] % 1) - (exact[a] % 1) || items[active[b]].w - items[active[a]].w);
+    for (const k of byRest) {
+      if (used >= left) break;
+      if (res[active[k]] + give[k] < items[active[k]].cap) { give[k]++; used++; }
+    }
+    if (!used) break;
+    active.forEach((i, k) => res[i] += give[k]);
+    left -= used;
+    active = active.filter(i => res[i] < items[i].cap);
+  }
+  return res;
+}
+
+/* из каких уроков можно взять текст: документы и презентации Google, файлы на Диске (PDF, Word) и конспекты кабинета.
+   Видео, таблицы, схемы и сайты — нет */
+function demoRtHasText(l) {
+  if (!l || l.kind === 'видео') return false;
+  const u = String(l.url || '');
+  if (/^konspekt\//.test(u)) return true;
+  const g = demoGid(u);
+  return !!g && (g.type === 'document' || g.type === 'presentation' || g.type === 'file');
+}
+/* уроки блока из программы; сначала те, на которые ссылаются задания с ошибками */
+function demoRtLessons(program, n, wrong) {
+  const b = (program.blocks || []).filter(x => String(x.n) === String(n))[0];
+  if (!b) return [];
+  const hot = {}; wrong.forEach(r => { if (r.ref && r.ref.id) hot[r.ref.id] = (hot[r.ref.id] || 0) + 1; });
+  const all = []; (b.subs || []).forEach(sb => (sb.lessons || []).forEach(l => { if (demoRtHasText(l)) all.push(l); }));
+  return all.map((l, i) => ({ l: l, i: i })).sort((x, y) => (hot[y.l.id] || 0) - (hot[x.l.id] || 0) || x.i - y.i).map(x => x.l);
+}
+
+/* план пересдачи.
+   Всего — от 80 до 100 заданий. Переформулировки вопросов экзамена — не больше 15%, по самым частым ошибкам.
+   Остальное — НОВЫЕ вопросы по материалам уроков: больше всего по блоку, где больше всего ошибок, дальше по убыванию;
+   плюс по одному вопросу из блоков без ошибок. Где у блока нет текстовых материалов (только видео), новые вопросы ИИ
+   составляет по фактам из ключа этого блока — другие вопросы на те же знания, не копии экзаменационных */
+function demoRtPlan(answers, program) {
+  const isWrong = r => !r.needsReview && r.correct !== true;
+  const usable = answers.filter(r => String(r.text || '').trim() && String(r.right || '').trim());
+  const wrongAll = usable.filter(isWrong);
+  if (!wrongAll.length) return { chunks: [], total: 0, byBlock: [] };
+  const total = Math.max(80, Math.min(100, wrongAll.length));
+  const blocks = [], by = {};
+  usable.forEach(r => {
+    const b = by[r.block] || (by[r.block] = (blocks.push({ n: r.block, wrong: [], ok: [] }), blocks[blocks.length - 1]));
+    (isWrong(r) ? b.wrong : b.ok).push(r);
+  });
+  (program.blocks || []).forEach(pb => { if (!by[pb.n]) { by[pb.n] = { n: pb.n, wrong: [], ok: [] }; blocks.push(by[pb.n]); } });
+  blocks.forEach(b => b.lessons = demoRtLessons(program, b.n, b.wrong));
+  const weak = blocks.filter(b => b.wrong.length), clean = blocks.filter(b => !b.wrong.length);
+  /* сколько новых вопросов блок выдержит: до 8 на урок с текстом, без текста — по одному на факт ключа */
+  const room = b => b.lessons.length ? 8 * b.lessons.length : b.wrong.length + b.ok.length;
+  /* 1) переформулировки ошибок: не больше 15%, по самым частым ошибкам */
+  const dup = demoRtShare(weak.map(b => ({ w: b.wrong.length, cap: b.wrong.length })), Math.round(total * 0.15));
+  /* 2) блоки без ошибок: по одному новому вопросу (где нет текста — по ключу), равномерно по программе */
+  const nExtra = Math.min(6, clean.length);
+  const extra = [];
+  for (let k = 0; k < nExtra; k++) extra.push(clean[Math.floor(k * clean.length / nExtra)]);
+  /* 3) новые вопросы по материалам: пропорционально ошибкам, каждому слабому блоку с материалами — хотя бы один */
+  let rest = total - dup.reduce((a, b) => a + b, 0) - extra.length;
+  const fresh = weak.map(() => 0);
+  weak.forEach((b, i) => { if (rest > 0 && room(b)) { fresh[i] = 1; rest--; } });
+  const more = demoRtShare(weak.map((b, i) => ({ w: b.wrong.length, cap: room(b) - fresh[i] })), rest);
+  more.forEach((k, i) => { fresh[i] += k; rest -= k; });
+  /* не хватило — добираем из блоков без ошибок, сначала где есть материалы */
+  const extraN = extra.map(() => 1);
+  if (rest > 0) {
+    const pool = clean.filter(b => b.lessons.length).concat(clean.filter(b => !b.lessons.length));
+    const add = demoRtShare(pool.map(b => ({ w: b.lessons.length ? 3 : 1, cap: Math.max(0, (b.lessons.length ? 6 * b.lessons.length : b.ok.length) - (extra.indexOf(b) >= 0 ? 1 : 0)) })), rest);
+    pool.forEach((b, i) => { if (!add[i]) return; const k = extra.indexOf(b);
+      if (k >= 0) extraN[k] += add[i]; else { extra.push(b); extraN.push(add[i]); } rest -= add[i]; });
+  }
+  /* материалов не хватило на 80 — переформулировок всё равно не больше 15% от того, что получилось */
+  const newSum = fresh.reduce((a, b) => a + b, 0) + extraN.reduce((a, b) => a + b, 0);
+  const dupCap = Math.floor(newSum * 0.15 / (1 - 0.15));
+  if (dup.reduce((a, b) => a + b, 0) > dupCap) {
+    const d2 = demoRtShare(weak.map(b => ({ w: b.wrong.length, cap: b.wrong.length })), dupCap);
+    d2.forEach((v, i) => dup[i] = v);
+  }
+  /* части для ИИ */
+  const chunks = [], plan = [];
+  const keySeeds = [];
+  weak.forEach((b, i) => {
+    const pass = b.wrong.map(r => ({ id: r.id, mode: 'fix' })).concat(b.ok.map(r => ({ id: r.id, mode: 'more' })));
+    const pool = pass.concat(pass.map(x => ({ id: x.id, key: x.id + '#2', mode: x.mode === 'fix' ? 'fix2' : 'more2' })));
+    pool.slice(0, dup[i]).forEach(x => keySeeds.push(x));
+  });
+  const newItems = [];
+  const splitNew = (b, n) => {                       /* n новых вопросов по блоку → части по 5, уроки делим между частями */
+    const parts = Math.ceil(n / 5);
+    for (let p = 0; p < parts; p++) {
+      const size = Math.min(5, n - p * 5);
+      const ls = b.lessons.filter((l, k) => k % parts === p);
+      chunks.push({ t: 'new', items: [{ block: b.n, n: size, part: p, parts: parts, lessons: (ls.length ? ls : b.lessons).map(l => l.id) }] });
+    }
+  };
+  weak.forEach((b, i) => { if (fresh[i]) splitNew(b, fresh[i]); });
+  extra.forEach((b, k) => {
+    if (extraN[k] > 1) splitNew(b, extraN[k]); else newItems.push({ block: b.n, n: 1, lessons: b.lessons.map(l => l.id) });
+  });
+  for (let k = 0; k < newItems.length; k += 5) chunks.push({ t: 'new', items: newItems.slice(k, k + 5) });
+  const keyChunks = [];
+  for (let k = 0; k < keySeeds.length; k += 5) keyChunks.push({ t: 'key', seeds: keySeeds.slice(k, k + 5) });
+  chunks.unshift(...keyChunks);
+  /* сводка для РОПа */
+  const cnt = {};
+  const put = (n, f, v) => { const x = cnt[n] || (cnt[n] = { n: n, errors: (by[n] || { wrong: [] }).wrong.length, dup: 0, fresh: 0, noText: !(by[n] && by[n].lessons.length) }); x[f] += v; };
+  keySeeds.forEach(x => { const a = usable.filter(r => r.id === x.id)[0]; if (a) put(a.block, 'dup', 1); });
+  chunks.forEach(c => (c.items || []).forEach(it => put(it.block, 'fresh', it.n)));
+  Object.keys(cnt).forEach(n => { cnt[n].count = cnt[n].dup + cnt[n].fresh; plan.push(cnt[n]); });
+  const sum = plan.reduce((a, b) => a + b.count, 0);
+  return { chunks: chunks, total: sum, dup: keySeeds.length, byBlock: plan.sort((x, y) => y.errors - x.errors || y.count - x.count) };
+}
+/* урокам-конспектам нужен текст от кабинета РОПа: сайт хранит их зашифрованными, а расшифровывает браузер */
+function demoRtNeed(program, chunk) {
+  const all = {}; (program.blocks || []).forEach(b => (b.subs || []).forEach(sb => (sb.lessons || []).forEach(l => all[l.id] = l)));
+  const need = [];
+  (chunk.items || []).forEach(it => it.lessons.forEach(id => { const l = all[id]; if (l && /^konspekt\//.test(String(l.url))) need.push({ id: id, url: l.url }); }));
+  return need;
+}
+
+const demoRtLive = r => r.status === "open" || (r.status === "approved" && !!r.opensAt && new Date(r.opensAt) <= new Date());
 async function demoApi(action, d) {
   await new Promise(r => setTimeout(r, 80));
   const tk = String(APP.token || "").replace(/^demo-/, "");
@@ -2735,6 +2941,8 @@ async function demoCall(action, d) {
     }
     case "question.ask": { DEMO.questions = DEMO.questions || []; DEMO.questions.unshift({ id: "q" + Date.now(), userId: demoMe().id, fio: demoMe().fio, lessonId: d.lessonId || "", lessonTitle: d.lessonTitle || "", text: d.text, at: new Date().toISOString(), answer: "", to: demoMe().role === "employee" ? "rop" : "dev" }); return { ok: true }; }
     case "my.questions": return { questions: (DEMO.questions || []).filter(q => q.userId === demoMe().id) };
+    case "question.seen": { const now = new Date().toISOString();
+      (DEMO.questions || []).forEach(q => { if (q.userId === demoMe().id && q.answer && !q.seenAt) q.seenAt = now; }); demoKeep(); return { ok: true }; }
     case "question.edit": case "question.del": {
       const q = (DEMO.questions || []).filter(x => x.id === d.id && x.userId === demoMe().id)[0];
       if (!q) return { error: "Вопрос не найден" };
@@ -2754,7 +2962,7 @@ async function demoCall(action, d) {
       const q = (DEMO.questions || []).filter(x => x.id === d.id)[0];
       if (!q) return { error: "Вопрос не найден" };
       if (q.to === "dev" && demoMe().role !== "dev") return { error: "Нужны права разработчика" };
-      q.answer = d.answer; q.answeredAt = new Date().toISOString(); q.answeredBy = demoMe().fio;
+      q.answer = d.answer; q.answeredAt = new Date().toISOString(); q.answeredBy = demoMe().fio; q.seenAt = "";
       return { ok: true };
     }
     case "lesson.open": demoState().lastLesson = d.lessonId; return { ok: true };
@@ -2809,7 +3017,131 @@ async function demoCall(action, d) {
       a.archived = !!d.archived; a.archivedAt = d.archived ? new Date().toISOString() : ""; return { ok: true };
     }
     case "admin.attemptDel": DEMO.attempts = DEMO.attempts.filter(x => x.id !== d.id); return { ok: true };
-    case "admin.attempt": return DEMO.attempts.filter(a => a.id === d.id)[0] || { answers: [] };
+    case "admin.attempt": {
+      const a = DEMO.attempts.filter(x => x.id === d.id)[0]; if (!a) return { answers: [] };
+      return Object.assign(JSON.parse(JSON.stringify(a)), { kind: a.kind || "exam", sentAt: a.sentAt || "",
+        retakes: DEMO.retakes.filter(r => r.fromAttempt === a.id).map(r => ({ id: r.id, status: r.status, opensAt: r.opensAt || "", count: r.questions.length, available: demoRtLive(r) })) });
+    }
+    /* ---- пересдача в демо: те же шаги, что на сервере; задания «от ИИ» — заготовки по ошибкам ---- */
+    case "admin.reportSend": { const a = DEMO.attempts.filter(x => x.id === d.id)[0]; if (!a) return { error: "Попытка не найдена" };
+      a.sentAt = d.sent ? new Date().toISOString() : ""; demoKeep(); return { ok: true }; }
+    case "admin.retakeGenerate": {
+      const a = DEMO.attempts.filter(x => x.id === d.attemptId)[0]; if (!a) return { error: "Попытка не найдена" };
+      const program = PR.program || await demoProgram();
+      if (!d.id) {
+        const plan = demoRtPlan(a.answers || [], program);
+        if (!plan.chunks.length) return { error: "В этой попытке нет ошибок — пересдача не нужна" };
+        const id = "rt-demo-" + Date.now();
+        DEMO.retakes.unshift({ id: id, userId: a.userId, fio: a.fio, fromAttempt: a.id, status: "draft", createdAt: new Date().toISOString(),
+                               minutes: 120, questions: [], plan: plan.chunks });
+        demoKeep(); return { id: id, chunks: plan.chunks.length, done: 0, total: 0, planned: plan.total, dup: plan.dup, byBlock: plan.byBlock,
+                             need: plan.chunks.map(c => demoRtNeed(program, c)) };
+      }
+      await new Promise(res => setTimeout(res, 150 + Math.random() * 300));
+      const r = DEMO.retakes.filter(x => x.id === d.id)[0]; if (!r) return { error: "Пересдача не найдена" };
+      const c = (r.plan || [])[d.chunk]; if (!c) return { error: "Часть пересдачи не найдена" };
+      const ans = {}; (a.answers || []).forEach(x => ans[x.id] = x);
+      const lesson = {}; (program.blocks || []).forEach(b => b.subs.forEach(sb => sb.lessons.forEach(l => lesson[l.id] = l)));
+      const mk = (i, o) => Object.assign(i % 3 === 2
+        ? { type: "short", points: 2, answer: { model: "В рабочей версии эталон пишет ИИ по материалу.", must: ["суть из материала"] } }
+        : { type: "single", points: 1, options: [{ id: "a", t: "Верный вариант (демо)" }, { id: "b", t: "Неверный 1" }, { id: "c", t: "Неверный 2" }, { id: "d", t: "Неверный 3" }], answer: "a" },
+        { id: "rq" + Date.now() + "-" + d.chunk + "-" + i, chunk: d.chunk }, o);
+      let made = [];
+      if (c.t === "key") made = c.seeds.map((x, i) => { const w = ans[x.id] || {}; return mk(i, { origin: "key", from: x.key || x.id, block: w.block,
+        text: "Переформулировка: " + String(w.text || "").slice(0, 110), explain: w.explain || "", ref: w.ref || null, source: w.source || "" }); });
+      else c.items.forEach(it => { for (let k = 0; k < it.n; k++) { const lid = it.lessons[k % Math.max(1, it.lessons.length)], l = lesson[lid] || {};
+        const got = d.texts && d.texts[lid] ? " (текст конспекта получен: " + d.texts[lid].length + " зн.)" : "";
+        made.push(mk(made.length, { origin: "new", from: lid || "key-" + it.block, block: it.block, text: "Новый вопрос по материалу «" + (l.title || "ключ экзамена") + "»" + got,
+          explain: "В рабочей версии — пояснение по материалу.", ref: l.id ? { id: l.id, title: l.title } : null, source: l.title || "" })); } });
+      r.questions = r.questions.filter(q => q.chunk !== d.chunk).concat(made);
+      demoKeep(); return { id: r.id, chunks: r.plan.length, done: d.chunk + 1, added: made.length, total: r.questions.length };
+    }
+    case "admin.retakeGet": { const r = DEMO.retakes.filter(x => x.id === d.id)[0]; if (!r) return { error: "Пересдача не найдена" };
+      return Object.assign(JSON.parse(JSON.stringify(r)), { available: demoRtLive(r) }); }
+    case "admin.retakeSave": { const r = DEMO.retakes.filter(x => x.id === d.id)[0]; if (!r) return { error: "Пересдача не найдена" };
+      if (demoRtLive(r)) return { error: "Пересдача открыта сотруднику — сначала закройте доступ" };
+      for (const q of d.questions || []) {
+        if (!String(q.text || "").trim()) continue;
+        if (q.type === "short" ? !String((q.answer || {}).model || "").trim() : ![].concat(q.answer || []).filter(Boolean).length)
+          return { error: "У задания «" + String(q.text).slice(0, 40) + "…» " + (q.type === "short" ? "нет эталонного ответа" : "не отмечен верный вариант") };
+      }
+      r.questions = (d.questions || []).filter(q => String(q.text || "").trim()).map(q => Object.assign({}, q, { id: q.id || "rq" + Math.random().toString(36).slice(2) }));
+      r.minutes = 120; demoKeep(); return r; }
+    case "admin.retakeApprove": { const r = DEMO.retakes.filter(x => x.id === d.id)[0];
+      if (!r.questions.length) return { error: "В пересдаче нет ни одного задания" };
+      r.status = "approved"; r.approvedAt = new Date().toISOString(); demoKeep(); return r; }
+    case "admin.retakeOpen": { const r = DEMO.retakes.filter(x => x.id === d.id)[0];
+      if (DEMO.retakes.some(x => x.userId === r.userId && x.id !== r.id && (x.status === "open" || (x.status === "approved" && x.opensAt))))
+        return { error: "У сотрудника уже есть открытая или назначенная пересдача — сначала закройте её" };
+      if (d.when === "now") { r.status = "open"; r.opensAt = ""; } else { r.status = "approved"; r.opensAt = new Date(d.when + "T00:00").toISOString(); }
+      demoKeep(); return r; }
+    case "admin.retakeClose": { const r = DEMO.retakes.filter(x => x.id === d.id)[0]; r.status = r.status === "draft" ? "draft" : "approved"; r.opensAt = ""; demoKeep(); return r; }
+    case "admin.retakeDel": DEMO.retakes = DEMO.retakes.filter(x => x.id !== d.id || x.status === "done"); demoKeep(); return { ok: true };
+    case "my.exams": {
+      const me = demoMe(), live = DEMO.retakes.filter(r => r.userId === me.id && demoRtLive(r))[0];
+      const planned = !live && DEMO.retakes.filter(r => r.userId === me.id && r.status === "approved" && r.opensAt)[0];
+      return { locked: !!live, retake: live ? { id: live.id, count: live.questions.length, minutes: 120 } : null,
+               planned: planned ? { opensAt: planned.opensAt } : null,
+               attempts: DEMO.attempts.filter(a => a.userId === me.id && !a.archived).map(a => ({ id: a.id, kind: a.kind || "exam", finishedAt: a.finishedAt,
+                 percent: a.percent, verdict: a.verdict, score: a.score, max: a.max, sent: !!a.sentAt })) };
+    }
+    case "my.report": {
+      const me = demoMe();
+      if (DEMO.retakes.some(r => r.userId === me.id && demoRtLive(r))) return { error: "Разбор откроется после пересдачи" };
+      const a = DEMO.attempts.filter(x => x.id === d.id && x.userId === me.id)[0];
+      if (!a || !a.sentAt) return { error: "Разбор этой попытки руководитель ещё не отправил" };
+      const all = a.answers || [], bad = r => !r.needsReview && r.correct !== true;
+      const wrong = all.map((r, i) => Object.assign({}, r, { n: i + 1 })).filter(bad);
+      return { id: a.id, kind: a.kind || "exam", finishedAt: a.finishedAt, percent: a.percent, verdict: a.verdict, score: a.score, max: a.max,
+               total: all.length, byBlock: a.byBlock || [], answers: wrong, fio: a.fio,
+               counts: { ok: all.filter(r => !r.needsReview && r.correct === true).length, part: all.filter(r => bad(r) && Number(r.points) > 0).length,
+                         rev: all.filter(r => r.needsReview).length, bad: all.filter(r => bad(r) && !Number(r.points)).length } };
+    }
+    case "retake.start": {
+      const r = DEMO.retakes.filter(x => x.userId === demoMe().id && demoRtLive(x))[0]; if (!r) return { error: "Пересдача сейчас не открыта" };
+      return { id: r.id, minutes: 120, questions: r.questions.map(q => ({ id: q.id, type: q.type, text: q.text, points: q.points, block: q.block,
+        opts: (q.options || []).map(o => ({ id: o.id, t: o.t })) })) };
+    }
+    case "retake.submit": {
+      const me = demoMe(), r = DEMO.retakes.filter(x => x.userId === me.id && demoRtLive(x))[0];
+      if (!r || r.id !== d.data.id) return { error: "Пересдача уже закрыта или сдана" };
+      const given = {}; (d.data.answers || []).forEach(x => given[x.id] = x.given);
+      const titles = {}; ((PR.program && PR.program.blocks) || []).forEach(b => titles[b.n] = b.title);
+      let pts = 0, max = 0, ok = 0; const by = {};
+      const answers = r.questions.map(q => {
+        const g = given[q.id], opt = id => ((q.options || []).filter(o => o.id === id)[0] || {}).t || "";
+        const right = q.type === "short" ? q.answer.model : [].concat(q.answer).map(opt).join("; ");
+        const correct = q.type === "short" ? String(g || "").trim().length > 20
+          : q.type === "single" ? g === q.answer : JSON.stringify([].concat(g || []).sort()) === JSON.stringify([].concat(q.answer).sort());
+        const p = correct ? q.points : 0; pts += p; max += q.points; if (correct) ok++;
+        const b = by[q.block] || (by[q.block] = { n: q.block, title: titles[q.block] || "", got: 0, max: 0 }); b.got += p; b.max += q.points;
+        return { id: q.id, block: q.block, type: q.type, given: g, points: p, max: q.points, correct: correct, text: q.text, right: right,
+                 givenText: g == null || g === "" ? "— нет ответа —" : q.type === "short" ? String(g) : [].concat(g).map(opt).join("; "),
+                 explain: q.explain, source: "пересдача (демо)" };
+      });
+      const percent = max ? Math.round(pts / max * 100) : 0, verdict = percent >= 90 ? "сдал" : percent >= 60 ? "пересдача" : "не сдал";
+      const id = "att-demo-" + Date.now();
+      const res = { score: pts, max: max, percent: percent, correct: ok, total: answers.length, verdict: verdict, byBlock: Object.values(by), kind: "retake" };
+      DEMO.attempts.unshift(Object.assign({ id: id, userId: me.id, fio: me.fio, login: me.login, retakeId: r.id, finishedAt: new Date().toISOString(),
+        durationSec: d.data.durationSec, overtimeSec: d.data.overtimeSec, away: d.data.away, answers: answers }, res));
+      r.status = "done"; r.doneAt = new Date().toISOString(); r.attemptId = id;
+      demoKeep(); return Object.assign({ id: id }, res);
+    }
+    case "admin.attemptGrade": {                     /* как на сервере: итог через разницу «было → стало» */
+      const a = DEMO.attempts.filter(x => x.id === d.id)[0]; if (!a) return { error: "Попытка не найдена" };
+      const r = (a.answers || []).filter(x => x.id === d.qid)[0]; if (!r) return { error: "Этого задания нет в отчёте" };
+      const max = Number(r.max) || 0, pts = Math.max(0, Math.min(max, Math.round(Number(d.points))));
+      const prev = Number(r.points) || 0, prevOk = r.correct === true, wasPending = !!r.needsReview;
+      const pendBefore = a.pending !== undefined ? a.pending : (a.answers || []).filter(x => x.needsReview).reduce((t, x) => t + (Number(x.max) || 0), 0);
+      r.manual = { by: demoMe().fio, at: new Date().toISOString(), note: String(d.note || ""), prev: prev, first: r.manual ? r.manual.first : prev };
+      r.points = pts; r.correct = pts === max; r.needsReview = false;
+      const bb = (a.byBlock || []).filter(x => String(x.n) === String(r.block))[0]; if (bb) bb.got += pts - prev;
+      a.score = a.score - prev + pts; a.pending = Math.max(0, pendBefore - (wasPending ? max : 0));
+      a.percent = a.max ? Math.round(a.score / Math.max(1, a.max - a.pending) * 100) : 0;
+      a.verdict = a.percent >= 90 ? "сдал" : a.percent >= 60 ? "пересдача" : "не сдал";
+      a.correct = (a.correct || 0) + (r.correct ? 1 : 0) - (prevOk ? 1 : 0);
+      demoKeep(); return JSON.parse(JSON.stringify(a));
+    }
     case "admin.users": return { users: Object.keys(DEMO.users).map(k => Object.assign({ active: true, archived: false }, DEMO.users[k]))
       .filter(u => demoMe().role === "dev" || u.role === "employee")
       .map(u => { const c = Object.assign({}, u, { locked: !!u.lockedAt }); delete c.demoPass; return c; }) };
@@ -2857,6 +3189,7 @@ async function demoCall(action, d) {
           DEMO.users[k].login = логин;
         }
         Object.assign(DEMO.users[k], { fio: d.data.fio, role: d.data.role || DEMO.users[k].role });
+        if (d.data.stage === "study" || d.data.stage === "work") DEMO.users[k].stage = d.data.stage;
         if (d.data.password && !/^(emp|admin|dev)$/.test(k)) DEMO.users[k].demoPass = d.data.password;
         if (d.data.password && me.role === "dev") { DEMO.users[k].fails = 0; DEMO.users[k].lockedAt = ""; }   /* новый пароль от разработчика снимает блокировку */
         if (d.data.password && me.role !== "dev" && DEMO.users[k].lockedAt) return { error: "Вход заблокирован после неверных попыток — снять может только разработчик" };
@@ -2865,7 +3198,8 @@ async function demoCall(action, d) {
       }
       if (Object.values(DEMO.users).some(u => String(u.login).toLowerCase() === String(d.data.login).toLowerCase())) return { error: "Такой логин уже есть" };
       const id = "u-" + Date.now(), key = "x" + Date.now();
-      DEMO.users[key] = { id: id, fio: d.data.fio, login: d.data.login, role: d.data.role || "employee", demoPass: d.data.password };
+      DEMO.users[key] = { id: id, fio: d.data.fio, login: d.data.login, role: d.data.role || "employee", demoPass: d.data.password,
+                          stage: d.data.stage || ((d.data.role || "employee") === "employee" ? "study" : "work") };
       DEMO.state[id] = { lessons: {}, quizzes: {}, examAllowed: false, examForce: false, seeded: true };
       return { ok: true, id: id };
     }

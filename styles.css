@@ -1655,6 +1655,12 @@ label.f{font-family:var(--f-text); font-size:13px; font-weight:600; letter-spaci
   .mdel, .mshow, .mbtn button, table.bt button, .atact button,
   .missrow, .qseg button, .nseg button{min-height:38px; padding-left:10px; padding-right:10px;}
   #pweye, .pwrow button{min-height:38px;}
+  /* минимальная высота без флекса прижимала подпись к верху — центруем по обеим осям */
+  .les .go, .link, .seg button, .chips button, .btn.small, .tnav .go, #app .btn,
+  .viewer .vhead button, .modal .mbtns button, .tcbar button, .vnotes .nbtns button,
+  .mdel, .mshow, table.bt button, .atact button, .qseg button, .nseg button,
+  #pweye, .pwrow button{display:inline-flex; align-items:center; justify-content:center; text-align:center; line-height:1.25;}
+  .missrow{display:flex; align-items:center; justify-content:space-between; gap:10px;}
   .les .go{padding:8px 10px;}
   .les .star{min-width:40px; font-size:19px;}
   .les .chk, .les .done-chk{min-width:38px; min-height:38px;}
@@ -1678,8 +1684,12 @@ label.f{font-family:var(--f-text); font-size:13px; font-weight:600; letter-spaci
 /* телефон: в длинных формах «Сохранить» оставалось далеко внизу — закрепляем у нижнего края окна */
 @media (max-width:760px){
   .modal .mbtns{position:sticky; bottom:0; background:#fff; padding:10px 0 4px; margin-top:10px; z-index:3;
-    box-shadow:0 -10px 14px 6px #fff;}
-  .modal .mbtns button{flex:1; min-height:44px;}
+    box-shadow:0 -10px 14px 6px #fff; flex-wrap:wrap; gap:8px;}
+  .modal .mbtns{flex-wrap:nowrap;}
+  .modal .mbtns button{flex:1 1 0; min-width:0; min-height:44px; white-space:nowrap; align-items:center; justify-content:center;
+    padding-left:8px; padding-right:8px;}
+  .modal .mbtns button.red{margin-right:0 !important;}
+  .lbl-long{display:none;} .lbl-short{display:inline;}      /* на телефоне короткие подписи, чтобы ряд не ломался */
 }
 
 /* «Развернуть» на телефоне: материал занимает весь экран, кнопка возврата остаётся сверху */
@@ -1698,3 +1708,61 @@ label.f{font-family:var(--f-text); font-size:13px; font-weight:600; letter-spaci
   #app .ni-foot{justify-content:space-between;}
   #app .card > .foot:last-child{margin-top:14px;}
 }
+/* короткая подпись кнопки — только на телефоне, длинная — на компьютере */
+@media (min-width:761px){ .lbl-short{display:none;} }
+
+/* ручная проверка задания в попытке экзамена */
+.agrade{margin-top:8px; display:flex; justify-content:flex-end;}
+.mgraded{margin-top:6px; color:var(--ok-ink,#14795A);}
+.gradeseg{display:flex; gap:6px; margin:6px 0 4px;}
+.gradeseg button{flex:1; min-height:44px; border:1.5px solid var(--line,#DAD8D3); border-radius:12px; background:#fff;
+  font-size:18px; font-weight:700; cursor:pointer;}
+.gradeseg button.on{background:var(--accent-fill,#C84E17); border-color:var(--accent-fill,#C84E17); color:#fff;}
+
+/* ---------- разбор в кабинете и индивидуальная пересдача ---------- */
+.rtbox{margin-top:18px; border-top:1px solid var(--line); padding-top:14px;}
+.rtline{display:flex; align-items:center; gap:14px; padding:10px 0; border-bottom:1px solid #F0EEEA;}
+.rtline>div{flex:1 1 auto; min-width:0;} .rtline b{display:block; font-size:14px;}
+.rtline small{display:block; color:var(--muted); font-size:12.5px; line-height:1.45; margin-top:2px;}
+.rtline .btn{flex:0 0 auto;}
+.rtmeta input{width:110px; font-size:15px; padding:9px 10px; border:1px solid var(--line); border-radius:9px;}
+.rtq .qn{flex-wrap:wrap; align-items:center; gap:8px;}
+.rtq .qn select{width:auto; max-width:200px; min-height:0; font-size:12.5px; padding:4px 6px; border:1px solid var(--line); border-radius:7px; background:#fff;}
+.rtq .qn .mdel{margin-left:auto;}
+.rtq textarea{min-height:64px;}
+.rtopts{display:flex; flex-direction:column; gap:6px;}
+.rtopt{display:flex; align-items:center; gap:8px; border:1px solid var(--line); border-radius:9px; padding:4px 8px;}
+.rtopt.on{border-color:#9ED6BE; background:#F2FAF6;}
+.rtopt input[type=text]{border:0; max-width:none; flex:1 1 auto; padding:7px 4px; background:transparent;}
+.rtopt input[type=radio], .rtopt input[type=checkbox]{width:18px; height:18px; flex:0 0 auto; accent-color:var(--green);}
+.rtorig{margin:6px 0 2px; font-size:13px; color:var(--muted);}
+.rtorig summary{cursor:pointer; font-weight:700;} .rtorig p{margin:6px 0 4px; color:var(--text);}
+.rtfoot{flex-wrap:wrap; align-items:center;}
+.rtdate input{font-size:15px; padding:9px 10px; border:1px solid var(--line); border-radius:9px; min-height:40px;}
+.exhist{margin-top:14px;}
+.exrow{display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,220px); gap:14px; align-items:center; padding:10px 0; border-bottom:1px solid #F0EEEA;}
+.exrow .exw b{display:block;} .exrow small{color:var(--muted);}
+.exrow .exp{display:flex; align-items:center; gap:8px;} .exrow .exp b{font-size:18px;}
+.exrow .exa{text-align:right;} .exrow .exa .hint{font-size:12.5px;}
+@media (max-width:760px){
+  .rtline{flex-direction:column; align-items:stretch; gap:8px;}
+  .rtline .btn{justify-content:center;}
+  .exrow{grid-template-columns:1fr auto; gap:6px 10px;}
+  .exrow .exa{grid-column:1 / -1; text-align:left;}
+  .exrow .exa .btn{width:100%; justify-content:center;}
+  .rtdate, .rtdate input{width:100%;}
+}
+.rtmeta{margin-bottom:14px;}
+@media (max-width:760px){
+  .rtfoot{display:grid; grid-template-columns:1fr 1fr; gap:8px; align-items:stretch;}
+  .rtfoot .btn{width:100%; justify-content:center; text-align:center; margin:0;}
+  .rtfoot .rtdate{grid-column:1 / -1;}
+}
+.rtdate{display:flex; flex-direction:column;} .rtdate label.f{margin:0 0 4px;}
+.rtfoot .btn{min-height:44px;}
+@media (max-width:760px){ .rtfoot .btn.wide{grid-column:1 / -1;} }
+.rgplan{max-height:240px; overflow:auto; margin:10px 0; font-size:13px;}
+.rgrow{display:grid; grid-template-columns:minmax(0,1fr) 34px 96px; gap:8px; padding:3px 0; border-bottom:1px solid #F0EEEA;}
+.rgrow b{text-align:right;} .rgrow i{color:var(--muted); font-style:normal; font-size:12px;}
+.rtsum{display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:4px 0 12px;} .rtsum b{margin-right:6px;}
+.rtnew{color:var(--green); font-weight:700;}

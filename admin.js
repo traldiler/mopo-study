@@ -172,7 +172,7 @@ async function admAttempts() {
     if (!shown.length) { box.appendChild(el("p", "hint", F.seg === "arch" ? "В архиве пусто." : "Под эти условия попыток нет.")); return; }
     const t = el("table", "bt");
     t.innerHTML = `<tr><th>Сотрудник</th><th>Когда</th><th>Время</th><th>Уходил</th><th>Баллы</th><th>%</th><th>Итог</th><th></th></tr>` +
-      shown.map((a, i) => `<tr class="arow" data-i="${i}"><td>${esc(a.fio)}</td><td>${when(a)}</td>
+      shown.map((a, i) => `<tr class="arow" data-i="${i}"><td>${esc(a.fio)}${a.kind === "retake" ? ' <span class="tag wait">пересдача</span>' : ""}${a.sentAt ? ' <span class="hint" title="Разбор отправлен в кабинет сотрудника">✉</span>' : ""}</td><td>${when(a)}</td>
         <td>${Math.round((a.durationSec || 0) / 60)} мин${a.overtimeSec ? " (+" + Math.round(a.overtimeSec / 60) + ")" : ""}</td>
         <td>${a.awayCount || 0}</td><td>${a.score} / ${a.max}</td><td>${a.percent}%</td>
         <td><span class="tag ${vcls(a.verdict)}">${esc(a.verdict)}</span></td>
@@ -198,15 +198,15 @@ async function attemptDelete(a, then) {
       text: `Попытка <b>${esc(a.fio)}</b> от ${esc(new Date(a.finishedAt).toLocaleString("ru-RU"))} (${a.percent}%, ${esc(a.verdict)}) и все ответы по ней будут стёрты. Отменить нельзя.<br>Если нужно только убрать из списка — перенесите в архив.` })) return;
   try { await api("admin.attemptDel", { id: a.id }); toast("Результат удалён"); then(); } catch (e) { fail(e); }
 }
-async function admAttempt(id) {
+async function admAttempt(id, ready) {
   const host = $("#admbody");
-  host.innerHTML = `<div class="card"><p class="lead">Загружаем ответы…</p></div>`;
+  if (!ready) host.innerHTML = `<div class="card"><p class="lead">Загружаем ответы…</p></div>`;
   let a;
-  try { a = await api("admin.attempt", { id: id }); if (!PR.program) PR.program = await api("program"); } catch (e) { return fail(e); }
+  try { a = ready || await api("admin.attempt", { id: id }); if (!PR.program) PR.program = await api("program"); } catch (e) { return fail(e); }
   const byBlock = (a.byBlock || []).slice().sort((x, y) => blockNum(x.n) - blockNum(y.n));
   const vcls = a.verdict === "сдал" ? "ok" : a.verdict === "пересдача" ? "retry" : "fail";
   host.innerHTML = `<div class="card">
-    <div class="qhead"><div><h3>${new Date(a.finishedAt).toLocaleString("ru-RU")}</h3><h2>${esc(a.fio)}</h2></div>
+    <div class="qhead"><div><h3>${a.kind === "retake" ? "Пересдача · " : ""}${new Date(a.finishedAt).toLocaleString("ru-RU")}</h3><h2>${esc(a.fio)}</h2></div>
       <div class="chip">${a.percent}% · ${esc(a.verdict)}</div></div>
     <div class="res">
       <div><b>${a.score} / ${a.max}</b><span>баллов</span></div>
@@ -223,17 +223,25 @@ async function admAttempt(id) {
       <button class="btn ghost" id="afb" type="button">Разбор для сотрудника</button>
       <button class="btn small white" id="aarch" type="button" style="margin-left:auto">${a.archived ? "Вернуть из архива" : "В архив"}</button>
       <button class="btn small red" id="adel" type="button">Удалить</button></div>
+    <div class="rtbox" id="rtbox"></div>
+    ${(a.answers || []).some(r => r.needsReview) ? `<div class="note warn"><b>Ждут ручной проверки: ${(a.answers || []).filter(r => r.needsReview).length}.</b>
+      ИИ не смог их оценить — поставьте балл сами. Пока они не проверены, в процент не входят.
+      <button class="btn small white" id="aonlyrev" type="button">Показать только их</button></div>` : ""}
     <div class="foot" style="margin-top:6px"><button class="btn ghost" id="atoggle" type="button">Показать ответы по заданиям</button></div>
     <div id="alist" hidden>
     ${(a.answers || []).map((r, i) => `<div class="q ${r.correct === true ? "" : "bad"}">
       <div class="qn"><b>${i + 1} · блок ${blockNum(r.block)}</b><i>${esc(r.difficulty || r.type)}</i><i>${r.points}/${r.max} балла</i><i>${r.sec || 0} сек</i>
-        <span class="tag ${r.correct === true ? "ok" : r.points ? "retry" : "fail"}">${r.correct === true ? "верно" : r.points ? "частично" : "неверно"}</span></div>
+        ${r.needsReview ? '<span class="tag wait">нужна проверка</span>'
+          : `<span class="tag ${r.correct === true ? "ok" : r.points ? "retry" : "fail"}">${r.correct === true ? "верно" : r.points ? "частично" : "неверно"}</span>`}</div>
       <p class="qt">${esc(r.text || r.id)}</p>
       <div class="hint"><b>Ответ:</b> ${esc(r.givenText || "")}</div>
       <div class="hint"><b>Эталон:</b> ${esc(r.right || "")}</div>
       ${r.ai ? `<div class="hint"><b>Проверка ИИ:</b> ${esc(r.ai.comment || "")}${r.ai.miss && r.ai.miss.length ? " · не раскрыто: " + esc(r.ai.miss.join("; ")) : ""}</div>` : ""}
       ${r.sim ? `<div class="hint"><b>Разбор задания:</b> ${esc((r.sim.notes || []).join("; ") || "выполнено верно")}</div>` : ""}
-      <div class="hint"><b>Источник:</b> ${esc(r.source || "")}</div></div>`).join("")}
+      <div class="hint"><b>Источник:</b> ${esc(r.source || "")}</div>
+      ${r.manual ? `<div class="hint mgraded"><b>Проверено вручную:</b> ${esc(r.manual.by || "")} · ${esc(dayRu(r.manual.at))} ·
+        было ${r.manual.first !== undefined ? r.manual.first : r.manual.prev}, стало ${r.points}${r.manual.note ? " — «" + esc(r.manual.note) + "»" : ""}</div>` : ""}
+      <div class="agrade"><button class="btn small white" data-grade="${i}" type="button">${r.needsReview ? "Проверить вручную" : "Изменить балл"}</button></div></div>`).join("")}
     </div>
   </div>`;
   $("#atoggle").onclick = () => {
@@ -241,64 +249,521 @@ async function admAttempt(id) {
     $("#atoggle").textContent = box.hidden ? "Показать ответы по заданиям" : "Скрыть ответы";
   };
   $("#aback").onclick = admAttempts;
+  if ($("#aonlyrev")) $("#aonlyrev").onclick = () => {
+    $("#alist").hidden = false; $("#atoggle").textContent = "Скрыть ответы";
+    [...$("#alist").children].forEach((c, i) => { c.hidden = !(a.answers[i] && a.answers[i].needsReview); });
+    $("#alist").scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+  $("#alist").querySelectorAll("[data-grade]").forEach(btn => btn.onclick = () => gradeAnswer(a, a.answers[+btn.dataset.grade]));
   $("#aarch").onclick = once(() => attemptArchive(a, admAttempts));
   $("#adel").onclick = once(() => attemptDelete(a, admAttempts));
   $("#arep").onclick = () => printReport(a, "full");
   $("#afb").onclick = () => printReport(a, "feedback");
+  attemptRetakeBox(a);
+}
+
+/* ---------- разбор в кабинет сотрудника и индивидуальная пересдача ---------- */
+const RT_STATE = r => r.status === "done" ? { t: "сдана", c: "ok" }
+  : r.available ? { t: "открыта сотруднику", c: "ok" }
+  : r.status === "approved" && r.opensAt ? { t: "откроется " + new Date(r.opensAt).toLocaleDateString("ru-RU"), c: "wait" }
+  : r.status === "approved" ? { t: "утверждена, доступ закрыт", c: "retry" }
+  : { t: "черновик", c: "" };
+function attemptRetakeBox(a) {
+  const box = $("#rtbox"); if (!box) return;
+  const wrong = (a.answers || []).filter(r => !r.needsReview && r.correct !== true).length;
+  const rev = (a.answers || []).filter(r => r.needsReview).length;
+  const list = a.retakes || [];
+  box.innerHTML = `<h3>Разбор и пересдача</h3>
+    <div class="rtline"><div><b>Разбор в кабинете сотрудника</b>
+        <small>${a.sentAt ? "Отправлен — сотрудник видит свои ошибки с правильными ответами и ссылками на уроки. Скачать его нельзя." : "Сотрудник увидит разбор только после этой кнопки. Пока идёт пересдача, разбор у него скрыт."}</small></div>
+      <button class="btn small ${a.sentAt ? "white" : ""}" id="asend" type="button">${a.sentAt ? "Убрать из кабинета" : "Отправить разбор в кабинет МОПО"}</button></div>
+    ${list.map(r => { const st = RT_STATE(r); return `<div class="rtline"><div><b>Пересдача · ${r.count} ${plural(r.count, "задание", "задания", "заданий").replace(/^\d+\s/, "")}</b>
+        <small><span class="tag ${st.c}">${esc(st.t)}</span></small></div>
+      <button class="btn small white" data-rt="${esc(r.id)}" type="button">${r.status === "done" ? "Посмотреть" : "Открыть"}</button></div>`; }).join("")}
+    ${a.kind !== "retake" && wrong ? `<div class="rtline"><div><b>Индивидуальная пересдача</b>
+        <small>Ошибок: ${wrong}. ИИ составит ${wrong > 100 ? "100" : wrong > 80 ? wrong : "80"} заданий: не больше 15% — переформулировки заданий с ошибками, остальное — новые вопросы по материалам уроков. Больше всего — по блокам, где больше всего ошибок, дальше по убыванию, плюс по одному вопросу из блоков без ошибок. Время — 2 часа, как у экзамена. Получится черновик: вы его проверите, утвердите и откроете сотруднику — сразу или с нужной даты.${rev ? " Задания на ручной проверке (" + rev + ") не считаются ошибками — сначала поставьте по ним балл." : ""}</small></div>
+      <button class="btn small" id="artgen" type="button">Сформировать пересдачу</button></div>` : ""}`;
+  $("#asend").onclick = once(async () => {
+    try {
+      await api("admin.reportSend", { id: a.id, sent: !a.sentAt });
+      a.sentAt = a.sentAt ? "" : new Date().toISOString();
+      toast(a.sentAt ? "Разбор появился в кабинете сотрудника" : "Разбор убран из кабинета сотрудника");
+      attemptRetakeBox(a);
+    } catch (e) { fail(e); }
+  });
+  box.querySelectorAll("[data-rt]").forEach(b => b.onclick = () => admRetake(b.dataset.rt, a));
+  if ($("#artgen")) $("#artgen").onclick = once(async () => {
+    if (list.some(r => r.status !== "done") && !await ask({ title: "Уже есть пересдача", ok: "Сформировать ещё одну",
+        text: "По этой попытке уже есть несданная пересдача. Новая соберётся отдельным черновиком — лишнюю потом можно удалить." })) return;
+    const id = await retakeGenerate(a);
+    if (id) admRetake(id, a);
+  });
+}
+/* ИИ собирает черновик частями по 5 заданий, три части одновременно: иначе 80 заданий готовились бы четверть часа */
+async function retakeGenerate(a) {
+  const back = el("div", "modal-back");
+  back.innerHTML = `<div class="modal" role="dialog" aria-modal="true" style="max-width:520px">
+    <b>Собираем пересдачу</b><p id="rgst">Считаем, сколько заданий нужно по каждому блоку…</p>
+    <div class="bar"><i id="rgbar" style="width:3%"></i></div>
+    <div id="rgplan" class="rgplan"></div>
+    <p class="hint">Обычно 4–8 минут. Не закрывайте страницу — готовые задания сохраняются по ходу.</p>
+    <div class="mbtns" id="rgbtns" hidden></div></div>`;
+  document.body.appendChild(back); lockScroll(true);
+  const close = () => { back.remove(); lockScroll(false); };
+  const st = t => { back.querySelector("#rgst").textContent = t; };
+  const bar = p => { back.querySelector("#rgbar").style.width = Math.max(3, Math.round(p * 100)) + "%"; };
+  let head;
+  try { head = await api("admin.retakeGenerate", { attemptId: a.id }); }
+  catch (e) { close(); fail(e); return null; }
+  const plan = (head.byBlock || []).slice().sort((x, y) => y.count - x.count || blockNum(x.n) - blockNum(y.n));
+  /* конспекты на сайте зашифрованы — текст для ИИ расшифровывает этот браузер и отправляет вместе с частью */
+  const texts = {};
+  const textOf = async (id, url) => {
+    if (texts[id] !== undefined) return texts[id];
+    try {
+      const html = await matLoad(String(url).split("?")[0]);
+      const d = new DOMParser().parseFromString(html, "text/html");
+      d.querySelectorAll("script,style,svg,noscript").forEach(x => x.remove());
+      texts[id] = (d.body ? d.body.innerText || d.body.textContent : "").replace(/[ \t]+/g, " ").replace(/\n\s*\n+/g, "\n\n").trim().slice(0, 40000);
+    } catch (e) { texts[id] = ""; }
+    return texts[id];
+  };
+  const textsFor = async k => { const out = {}; for (const x of ((head.need || [])[k] || [])) out[x.id] = await textOf(x.id, x.url); return out; };
+  const bt = n => ((PR.program && PR.program.blocks || []).filter(b => Number(b.n) === Number(n))[0] || {}).title || "";
+  back.querySelector("#rgplan").innerHTML = plan.length ? `<div class="hint"><b>План: ${plural(head.planned, "задание", "задания", "заданий")}</b></div>` +
+    `<div class="hint">Новых по материалам — ${head.planned - (head.dup || 0)}, переформулировок заданий экзамена — ${head.dup || 0}</div>` +
+    plan.map(b => `<div class="rgrow"><span>${blockNum(b.n)}. ${esc(bt(b.n))}${b.noText ? ' <em title="У блока нет текстовых материалов — новые вопросы по фактам из ключа экзамена">· нет текстов, по ключу</em>' : ""}</span><b>${b.count}</b><i>${b.errors ? "ошибок " + b.errors : "без ошибок"}</i></div>`).join("") : "";
+  const todo = [...Array(head.chunks).keys()], failed = [];
+  let done = 0, total = 0, stop = false;
+  const paint = () => { st(`Составляем задания: готово ${done} из ${head.chunks} частей${total ? " · заданий " + total : ""}…`); bar(done / head.chunks); };
+  const worker = async () => {
+    while (todo.length && !stop) {
+      const k = todo.shift();
+      let ok = false;
+      for (let tryN = 0; tryN < 2 && !ok; tryN++) {                 /* сбой Google или ИИ — одна повторная попытка сразу */
+        try { const r = await api("admin.retakeGenerate", { attemptId: a.id, id: head.id, chunk: k, texts: await textsFor(k) }); total = Math.max(total, r.total); ok = true; }
+        catch (e) { if (tryN) failed.push({ k: k, msg: e.message }); }
+      }
+      done++; paint();
+    }
+  };
+  paint();
+  await Promise.all([worker(), worker(), worker()]);
+  /* что не получилось — предлагаем повторить только эти части */
+  while (failed.length) {
+    const list = failed.splice(0);
+    const c = await new Promise(res => {
+      st(`Не получилось частей: ${list.length} из ${head.chunks} (${list[0].msg}). Остальные задания сохранены.`);
+      const b = back.querySelector("#rgbtns"); b.hidden = false;
+      b.innerHTML = `<button class="btn ghost" data-c="skip" type="button">Дальше без них</button><button class="btn" data-c="retry" type="button">Повторить эти части</button>`;
+      b.querySelectorAll("[data-c]").forEach(x => x.onclick = () => { b.hidden = true; res(x.dataset.c); });
+    });
+    if (c !== "retry") break;
+    done = head.chunks - list.length; todo.push(...list.map(x => x.k)); paint();
+    await Promise.all([worker(), worker(), worker()]);
+  }
+  bar(1); close();
+  toast(total ? "Черновик готов: " + plural(total, "задание", "задания", "заданий") + ". Проверьте и утвердите." : "ИИ не смог составить задания — добавьте их вручную");
+  return head.id;
+}
+
+/* редактор пересдачи: править можно, пока она закрыта для сотрудника */
+async function admRetake(id, att) {
+  const host = $("#admbody");
+  host.innerHTML = `<div class="card"><p class="lead">Загружаем пересдачу…</p></div>`;
+  let r, src = att;
+  try {
+    r = await api("admin.retakeGet", { id: id });
+    if (!src || src.id !== r.fromAttempt) src = await api("admin.attempt", { id: r.fromAttempt }).catch(() => null);
+    if (!PR.program) PR.program = await api("program");
+  } catch (e) { return fail(e); }
+  const orig = {}; ((src && src.answers) || []).forEach(x => orig[x.id] = x);
+  const qs = JSON.parse(JSON.stringify(r.questions || []));
+  const letters = "abcdef";
+  const locked = r.status === "done" || r.available;
+  const blocks = (PR.program.blocks || []);
+  const st = RT_STATE(r);
+  const kindName = { single: "один ответ", multi: "несколько ответов", short: "ответ своими словами" };
+  const today = new Date(Date.now() + 864e5).toISOString().slice(0, 10);
+  host.innerHTML = `<div class="card">
+    <div class="qhead"><div><h3>Индивидуальная пересдача</h3><h2>${esc(r.fio)}</h2></div><div class="chip">${esc(st.t)}</div></div>
+    <p class="lead">${r.status === "draft" ? "Черновик от ИИ. Проверьте каждое задание: формулировку, варианты и отмеченный верный ответ. Лишнее удалите, недостающее добавьте. Сотрудник ничего не увидит, пока вы не утвердите и не откроете пересдачу."
+      : r.status === "done" ? "Пересдача сдана — результат лежит в «Экзаменах»."
+      : r.available ? "Пересдача открыта сотруднику. Чтобы что-то поправить, сначала закройте доступ."
+      : r.opensAt ? "Утверждена и откроется сотруднику " + new Date(r.opensAt).toLocaleDateString("ru-RU") + ". До этого дня её можно поправить."
+      : "Утверждена, но сотруднику пока не видна. Откройте её сейчас или назначьте дату."}</p>
+    <p class="hint rtmeta">Время — 2 часа, как у экзамена. Пересдача не обрывается: после 2 часов в отчёте появится отметка о превышении.</p>
+    <div class="rtsum" id="rtsum"></div>
+    <div id="rtlist"></div>
+    ${locked ? "" : '<div class="foot"><button class="btn ghost" id="rtadd" type="button">+ Добавить задание</button></div>'}
+    <div class="foot rtfoot" id="rtfoot"></div></div>`;
+  const draw = () => {
+    const cnt = {}; qs.forEach(q => cnt[q.block] = (cnt[q.block] || 0) + 1);
+    const nNew = qs.filter(q => q.origin === "new").length, nKey = qs.filter(q => q.origin === "key").length;
+    $("#rtsum").innerHTML = `<b>${plural(qs.length, "задание", "задания", "заданий")}</b><span class="hint">новых ${nNew} · переформулировок ${nKey}</span>` + Object.keys(cnt).sort((x, y) => cnt[y] - cnt[x])
+      .map(n => `<span class="tag">блок ${blockNum(n)} — ${cnt[n]}</span>`).join("");
+    const list = $("#rtlist"); list.innerHTML = "";
+    if (!qs.length) list.appendChild(el("p", "hint", "Заданий пока нет."));
+    qs.forEach((q, i) => {
+      const o = q.origin === "new" || q.origin === "hand" ? null : orig[String(q.from || "").replace(/#\d+$/, "")];
+      const c = el("div", "q rtq");
+      const opts = q.options || [];
+      const isOn = id => q.type === "single" ? q.answer === id : [].concat(q.answer || []).includes(id);
+      c.innerHTML = `<div class="qn"><b>${i + 1}</b>
+          ${locked ? `<i>${esc(kindName[q.type] || q.type)}</i><i>блок ${blockNum(q.block)}</i>`
+            : `<select data-f="type">${Object.keys(kindName).map(k => `<option value="${k}" ${k === q.type ? "selected" : ""}>${kindName[k]}</option>`).join("")}</select>
+               <select data-f="block">${blocks.map(b => `<option value="${b.n}" ${Number(b.n) === Number(q.block) ? "selected" : ""}>блок ${blockNum(b.n)}</option>`).join("")}</select>`}
+          <i>${q.points} ${q.points === 1 ? "балл" : "балла"}</i>
+          ${locked ? "" : `<button class="mdel" data-f="del" type="button">Удалить</button>`}</div>
+        ${q.origin === "new" ? `<div class="rtorig rtnew">Новый вопрос по материалу${q.source ? " «" + esc(q.source) + "»" : ""}</div>` : ""}
+        ${o ? `<details class="rtorig"><summary>${o.correct === true ? "Переформулировка задания экзамена (ответил верно)" : "Переформулировка задания с ошибкой"}</summary><p>${esc(o.text || "")}</p>
+          <div class="hint"><b>Ответил:</b> ${esc(o.givenText || "")}</div><div class="hint"><b>Верно:</b> ${esc(o.right || "")}</div></details>` : ""}
+        <label class="f">Вопрос</label><textarea data-f="text" ${locked ? "disabled" : ""}>${esc(q.text || "")}</textarea>
+        ${q.type === "short" ? `<label class="f">Эталонный ответ</label><textarea data-f="model" ${locked ? "disabled" : ""}>${esc((q.answer && q.answer.model) || "")}</textarea>
+          <label class="f">Что обязательно должно быть в ответе (по пункту в строке)</label>
+          <textarea data-f="must" ${locked ? "disabled" : ""}>${esc(((q.answer && q.answer.must) || []).join("\n"))}</textarea>`
+        : `<label class="f">Варианты — отметьте ${q.type === "single" ? "один верный" : "все верные"}</label>
+          <div class="rtopts">${opts.map((x, j) => `<div class="rtopt ${isOn(x.id) ? "on" : ""}">
+              <input type="${q.type === "single" ? "radio" : "checkbox"}" name="rt${i}" data-ok="${j}" ${isOn(x.id) ? "checked" : ""} ${locked ? "disabled" : ""}>
+              <input type="text" data-opt="${j}" value="${esc(x.t)}" ${locked ? "disabled" : ""}>
+              ${locked ? "" : `<button class="mdel" data-rmopt="${j}" type="button" title="Убрать вариант">×</button>`}</div>`).join("")}</div>
+          ${locked || opts.length >= 6 ? "" : '<button class="btn small white" data-f="addopt" type="button">+ вариант</button>'}`}
+        <label class="f">Почему так (увидит сотрудник в разборе)</label><textarea data-f="explain" ${locked ? "disabled" : ""}>${esc(q.explain || "")}</textarea>`;
+      if (!locked) {
+        const f = n => c.querySelector(`[data-f="${n}"]`);
+        f("text").oninput = e => q.text = e.target.value;
+        f("explain").oninput = e => q.explain = e.target.value;
+        f("block").onchange = e => q.block = Number(e.target.value);
+        f("type").onchange = e => {
+          const t = e.target.value; if (t === q.type) return;
+          if (t === "short") { q.answer = { model: "", must: [] }; q.points = 2; delete q.options; }
+          else {
+            if (!q.options || !q.options.length) q.options = ["", "", "", ""].map((x, j) => ({ id: letters[j], t: "" }));
+            q.answer = t === "single" ? "" : []; q.points = t === "single" ? 1 : 2;
+          }
+          q.type = t; draw();
+        };
+        f("del").onclick = () => { qs.splice(i, 1); draw(); };
+        if (q.type === "short") {
+          f("model").oninput = e => { q.answer = q.answer || {}; q.answer.model = e.target.value; };
+          f("must").oninput = e => { q.answer = q.answer || {}; q.answer.must = e.target.value.split("\n").map(x => x.trim()).filter(Boolean); };
+        } else {
+          c.querySelectorAll("[data-opt]").forEach(inp => inp.oninput = () => { q.options[+inp.dataset.opt].t = inp.value; });
+          c.querySelectorAll("[data-ok]").forEach(inp => inp.onchange = () => {
+            const id = q.options[+inp.dataset.ok].id;
+            if (q.type === "single") q.answer = id;
+            else { const set = new Set([].concat(q.answer || [])); inp.checked ? set.add(id) : set.delete(id); q.answer = [...set]; }
+            draw();
+          });
+          c.querySelectorAll("[data-rmopt]").forEach(b => b.onclick = () => {
+            const gone = q.options.splice(+b.dataset.rmopt, 1)[0];
+            q.answer = q.type === "single" ? (q.answer === gone.id ? "" : q.answer) : [].concat(q.answer || []).filter(x => x !== gone.id);
+            draw();
+          });
+          if (f("addopt")) f("addopt").onclick = () => {
+            const used = new Set(q.options.map(x => x.id));
+            q.options.push({ id: letters.split("").filter(x => !used.has(x))[0], t: "" }); draw();
+          };
+        }
+      }
+      list.appendChild(c);
+    });
+  };
+  const payload = () => ({ id: r.id, questions: qs });
+  const act = async (fn, okText) => {
+    try { const upd = await fn(); if (okText) toast(okText); admRetake(r.id, src); return upd; } catch (e) { fail(e); }
+  };
+  const foot = $("#rtfoot");
+  const btn = (txt, cls, fn) => { const b = el("button", "btn " + (cls || ""), txt); b.type = "button"; b.onclick = once(fn); foot.appendChild(b); return b; };
+  btn("← К попытке", "ghost", () => src ? admAttempt(src.id) : admAttempts());
+  if (r.status === "done") { if (r.attemptId) btn("Открыть результат", "", () => admAttempt(r.attemptId)); }
+  else if (r.available || (r.status === "approved" && r.opensAt)) {
+    btn("Закрыть доступ", "white", () => act(() => api("admin.retakeClose", { id: r.id }), "Доступ закрыт — пересдача снова только у вас"));
+    if (!r.available) btn("Сохранить", "", () => act(() => api("admin.retakeSave", payload()), "Сохранено"));
+  } else {
+    btn("Сохранить", "white", () => act(() => api("admin.retakeSave", payload()), "Сохранено"));
+    if (r.status === "draft") btn("Утвердить", "", () => act(async () => {
+      await api("admin.retakeSave", payload()); return api("admin.retakeApprove", { id: r.id });
+    }, "Утверждено. Сотрудник пока не видит пересдачу — откройте её сейчас или с даты"));
+    else {
+      const wrap = el("span", "rtdate"); wrap.innerHTML = `<label class="f">Дата, с которой пересдача откроется сама</label><input type="date" id="rtwhen" min="${today}" value="${today}">`;
+      foot.appendChild(wrap);
+      btn("Открыть сейчас", "", async () => {
+        if (!await ask({ title: "Открыть пересдачу", ok: "Открыть", text: `<b>${esc(r.fio)}</b> сразу увидит пересдачу во вкладке «Экзамен». Разбор прошлой попытки у него скроется до сдачи.` })) return;
+        await act(async () => { await api("admin.retakeSave", payload()); return api("admin.retakeOpen", { id: r.id, when: "now" }); }, "Пересдача открыта сотруднику");
+      });
+      btn("Открыть с даты", "white", async () => {
+        const w = $("#rtwhen").value; if (!w) return toast("Выберите дату");
+        await act(async () => { await api("admin.retakeSave", payload()); return api("admin.retakeOpen", { id: r.id, when: w }); },
+          "Пересдача откроется " + new Date(w + "T00:00").toLocaleDateString("ru-RU"));
+      });
+    }
+  }
+  if (r.status !== "done") btn("Удалить", "red", async () => {
+    if (!await ask({ title: "Удалить пересдачу?", danger: true, ok: "Удалить", text: "Задания этой пересдачи будут стёрты. Отменить нельзя." })) return;
+    try { await api("admin.retakeDel", { id: r.id }); toast("Пересдача удалена"); src ? admAttempt(src.id) : admAttempts(); } catch (e) { fail(e); }
+  });
+  const bs = foot.querySelectorAll(".btn");                /* на телефоне кнопки по две в ряд: последняя без пары — во всю ширину */
+  if (bs.length % 2) bs[bs.length - 1].classList.add("wide");
+  if ($("#rtadd")) $("#rtadd").onclick = () => {
+    qs.push({ id: "", from: "", origin: "hand", block: (qs[0] && qs[0].block) || (blocks[0] && blocks[0].n) || 1, type: "single", points: 1, text: "", explain: "",
+              options: ["", "", "", ""].map((x, j) => ({ id: letters[j], t: "" })), answer: "" });
+    draw(); const last = $("#rtlist").lastElementChild; if (last) last.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
+  draw();
+}
+
+/* ручная проверка задания: РОП ставит балл сам, итог попытки пересчитывается */
+function gradeAnswer(a, r) {
+  if (!r) return;
+  const back = el("div", "modal-back");
+  const баллы = Array.from({ length: (Number(r.max) || 0) + 1 }, (_, k) => k);
+  back.innerHTML = `<div class="modal" role="dialog" aria-modal="true" style="max-width:520px">
+    <b>${r.needsReview ? "Проверить вручную" : "Изменить балл"}</b>
+    <p class="qt" style="margin:8px 0 6px">${esc(r.text || r.id)}</p>
+    <div class="hint"><b>Ответ:</b> ${esc(r.givenText || "— нет ответа —")}</div>
+    ${r.right ? `<div class="hint"><b>Эталон:</b> ${esc(r.right)}</div>` : ""}
+    ${r.ai ? `<div class="hint"><b>ИИ:</b> ${esc(r.ai.comment || "")}${r.ai.miss && r.ai.miss.length ? " · не раскрыто: " + esc(r.ai.miss.join("; ")) : ""}</div>` : ""}
+    <label class="f">Балл за задание (из ${r.max})</label>
+    <div class="seg gradeseg">${баллы.map(k => `<button type="button" data-p="${k}" class="${k === Number(r.points) ? "on" : ""}">${k}</button>`).join("")}</div>
+    <label class="f">Комментарий (попадёт в отчёт)</label>
+    <textarea id="gnote" placeholder="Например: суть раскрыта, ИИ придрался к формулировке">${esc((r.manual && r.manual.note) || "")}</textarea>
+    <div class="mbtns"><button class="btn ghost" data-a="0" type="button">Отмена</button>
+      <button class="btn" data-a="1" type="button">Сохранить балл</button></div></div>`;
+  document.body.appendChild(back); lockScroll(true);
+  let выбрано = Number(r.points) || 0;
+  back.querySelectorAll("[data-p]").forEach(b => b.onclick = () => {
+    выбрано = +b.dataset.p; back.querySelectorAll("[data-p]").forEach(x => x.classList.toggle("on", x === b));
+  });
+  const close = () => { back.remove(); lockScroll(false); };
+  back.querySelector('[data-a="0"]').onclick = close;
+  back.querySelector('[data-a="1"]').onclick = once(async () => {
+    try {
+      const upd = await api("admin.attemptGrade", { id: a.id, qid: r.id, points: выбрано, note: back.querySelector("#gnote").value.trim() });
+      close();
+      const y = window.scrollY;
+      await admAttempt(a.id, upd);
+      $("#alist").hidden = false; $("#atoggle").textContent = "Скрыть ответы";
+      window.scrollTo(0, y);
+      toast("Балл сохранён: " + upd.score + " из " + upd.max + " — " + upd.percent + "% · " + upd.verdict);
+    } catch (e) { fail(e); }
+  });
+}
+
+/* PDF по блокам: шапка и каждое задание снимаются отдельно и укладываются по страницам A4.
+   Одним снимком длинный отчёт не получался — у браузера есть предел высоты холста, и страницы выходили пустыми */
+const PDF_LIBS = ["https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js",
+                  "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"];
+const loadScript = src => new Promise((ok, bad) => {
+  if ([...document.scripts].some(x => x.src === src)) return ok();
+  const sc = document.createElement("script"); sc.src = src;
+  sc.onload = ok; sc.onerror = () => bad(new Error("Не удалось загрузить модуль PDF — проверьте интернет"));
+  document.head.appendChild(sc);
+});
+async function reportPdf(blocks, css, fileName) {
+  for (const src of PDF_LIBS) await loadScript(src);
+  const pdf = new window.jspdf.jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
+  const W = 210, H = 297, M = 10, CW = W - 2 * M, PAGE = H - 2 * M, HOSTW = 760, mmPerPx = CW / HOSTW;
+  const pagePx = PAGE / mmPerPx;                              /* высота листа в пикселях макета */
+  const host = document.createElement("div");
+  host.style.cssText = "position:fixed;left:0;top:0;width:" + HOSTW + "px;z-index:9998;background:#fff";
+  const cover = document.createElement("div");
+  cover.style.cssText = "position:fixed;inset:0;z-index:9999;background:rgba(35,34,39,.6);display:flex;align-items:center;justify-content:center;color:#fff;font:700 16px Arial,sans-serif";
+  document.body.append(host, cover);
+  const wrap = list => `<div class="rpaper" style="padding:0;margin:0;max-width:none;box-shadow:none;border:0;border-radius:0;background:#fff"><style>${css}</style>${list.join("")}</div>`;
+  const height = list => { host.innerHTML = wrap(list); return host.getBoundingClientRect().height; };
+  let first = true;
+  /* снимаем то, что сейчас в макете, как один лист (или несколько, если блок выше листа) */
+  const shoot = async list => {
+    host.innerHTML = wrap(list);
+    const box = host.getBoundingClientRect();
+    const links = [...host.querySelectorAll("a[href]")].map(el => {
+      const r = el.getBoundingClientRect(); return { url: el.href, x: r.left - box.left, y: r.top - box.top, w: r.width, h: r.height };
+    });
+    const canvas = await window.html2canvas(host, { scale: 1.3, backgroundColor: "#ffffff", useCORS: true, logging: false, windowWidth: HOSTW });
+    const pxPerMm = canvas.width / CW, slice = Math.floor(PAGE * pxPerMm);
+    for (let off = 0; off < canvas.height; off += slice) {
+      if (!first) pdf.addPage(); first = false;
+      const h = Math.min(slice, canvas.height - off), c = document.createElement("canvas");
+      c.width = canvas.width; c.height = h;
+      c.getContext("2d").drawImage(canvas, 0, off, canvas.width, h, 0, 0, canvas.width, h);
+      pdf.addImage(c.toDataURL("image/jpeg", 0.72), "JPEG", M, M, CW, h / pxPerMm);
+      links.forEach(l => {                                      /* ссылки на этом листе — кликабельные */
+        const top = l.y * mmPerPx - off / pxPerMm;
+        if (top >= 0 && top < h / pxPerMm) pdf.link(M + l.x * mmPerPx, M + top, l.w * mmPerPx, l.h * mmPerPx, { url: l.url });
+      });
+    }
+  };
+  try {
+    let page = [];
+    for (let i = 0; i < blocks.length; i++) {
+      cover.textContent = "Готовим PDF… " + Math.round(i / blocks.length * 100) + "%";
+      if (page.length && height(page.concat(blocks[i])) > pagePx) { await shoot(page); page = []; }   /* лист полон — снимаем */
+      page.push(blocks[i]);
+    }
+    if (page.length) await shoot(page);
+    pdf.save(fileName);
+  } finally { host.remove(); cover.remove(); }
 }
 
 /* ---------- печать отчётов ---------- */
+/* макет отчёта: один для PDF руководителя и для разбора в кабинете сотрудника.
+   opts.inApp — ссылки «где посмотреть» открывают урок прямо в кабинете */
+function reportParts(a, mode, opts) {
+  opts = opts || {};
+  const full = mode === "full";
+  const all = a.answers || [];
+  const isWrong = r => !r.needsReview && r.correct !== true;
+  const wrong = all.filter(isWrong);
+  const items = full ? all : wrong;
+  const blocks = (a.byBlock || []).slice().sort((x, y) => blockNum(x.n) - blockNum(y.n));
+  const pctOf = b => b.max ? Math.round(b.got / b.max * 100) : 0;
+  const weak = blocks.filter(b => b.max && b.got / b.max < 0.9).sort((x, y) => x.got / x.max - y.got / y.max);
+  const errByBlock = {}; wrong.forEach(r => { errByBlock[r.block] = (errByBlock[r.block] || 0) + 1; });
+  const cnt = a.counts || {                             /* в кабинет сотрудника сервер присылает только ошибки и готовые счётчики */
+    ok: all.filter(r => !r.needsReview && r.correct === true).length,
+    part: all.filter(r => !r.needsReview && r.correct !== true && Number(r.points) > 0).length,
+    rev: all.filter(r => r.needsReview).length,
+    bad: all.filter(r => !r.needsReview && r.correct !== true && !Number(r.points)).length
+  };
+  const manual = all.filter(r => r.manual);
+  const site = location.origin + location.pathname;
+  const where = r => {                                   /* «где смотреть» — ссылкой прямо на урок + точное место из ключа */
+    const ref = r.ref || null, title = (ref && ref.title) || r.source || "";
+    if (!(ref && ref.id)) return esc(title);
+    const link = opts.inApp ? `<a href="#" data-l="${esc(ref.id)}">${esc(title)}</a>`
+      : `<a href="${esc(site + "#s=cabinet&l=" + encodeURIComponent(ref.id))}">${esc(title)}</a>`;
+    const точнее = r.source && r.source !== title ? ` <span class="rp-src">(${esc(r.source)})</span>` : "";
+    return link + точнее;
+  };
+  const manualNote = r => r.manual ? `<div class="rp-mn">✎ Балл изменён вручную: было ${r.manual.first !== undefined ? r.manual.first : r.manual.prev}, стало ${r.points}
+      ${full ? `· ${esc(r.manual.by || "")}, ${esc(dayRu(r.manual.at))}${r.manual.note ? ` — «${esc(r.manual.note)}»` : ""}` : ""}</div>` : "";
+  const vcls = a.verdict === "сдал" ? "ok" : a.verdict === "пересдача" ? "retry" : "fail";
+  /* палитра проверена валидатором (цветовая слепота, контраст): верно · частично · на проверке · неверно */
+  const C = { ok: "#14795A", part: "#B07A00", rev: "#3B6FB6", bad: "#B83434" };
+  const total = all.length || 1;
+  const seg = (k, label) => cnt[k] ? `<i style="flex:${cnt[k]};background:${C[k]}" title="${label}: ${cnt[k]}"></i>` : "";
+  const legend = (k, label) => `<span><b style="background:${C[k]}"></b>${label} — ${cnt[k]}</span>`;
+  const bars = list => list.map(b => {
+    const p = pctOf(b), low = p < 90;
+    return `<div class="rp-br"><div class="rp-bn">${blockNum(b.n)}. ${esc(b.title)}</div>
+      <div class="rp-bt"><i style="width:${p}%"></i><em style="left:90%"></em></div>
+      <div class="rp-bv">${p}%${errByBlock[b.n] ? ` · ошибок ${errByBlock[b.n]}` : ""}${low ? ' <span class="rp-up">подтянуть</span>' : ""}</div></div>`;
+  }).join("");
+
+  const css = `.rpaper{font-family:Manrope,Arial,sans-serif;color:#232227;font-size:10.5pt;line-height:1.45}
+    .rpaper h1,.rpaper h2{font-family:inherit;letter-spacing:0;text-transform:none;color:#232227}
+    .rpaper h1{font-size:19pt;margin:0 0 4px} .rpaper h2{font-size:12pt;margin:20px 0 8px;border-top:2px solid #232227;padding-top:8px;break-after:avoid;page-break-after:avoid}
+    .rpaper .rp-meta{color:#4A4950;font-size:9.5pt;margin-bottom:12px}
+    .rpaper .rp-hero{display:flex;gap:18px;align-items:center;flex-wrap:wrap;margin:10px 0 6px}
+    .rpaper .rp-big{font-size:40pt;font-weight:800;line-height:1;letter-spacing:-.02em}
+    .rpaper .rp-vd{display:inline-block;border-radius:999px;padding:4px 12px;font-weight:800;font-size:10pt}
+    .rpaper .rp-vd.ok{background:#E4F4EC;color:#14795A} .rpaper .rp-vd.retry{background:#FDF3DE;color:#8A5F0A} .rpaper .rp-vd.fail{background:#FDF0F0;color:#B83434}
+    .rpaper .rp-scale{position:relative;height:10px;border-radius:5px;background:#EDEBE7;margin:10px 0 18px}
+    .rpaper .rp-scale i{position:absolute;left:0;top:0;bottom:0;border-radius:5px;background:#232227}
+    .rpaper .rp-scale em{position:absolute;top:-4px;bottom:-4px;width:2px;background:#B83434}
+    .rpaper .rp-scale span{position:absolute;top:14px;font-size:7.5pt;color:#6D6B72;transform:translateX(-50%);white-space:nowrap}
+    .rpaper .rp-tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:8px 0}
+    .rpaper .rp-tile{border:1px solid #E5E3DF;border-radius:10px;padding:8px 10px}
+    .rpaper .rp-tile b{display:block;font-size:16pt;line-height:1.1} .rpaper .rp-tile span{font-size:8.5pt;color:#6D6B72}
+    .rpaper .rp-stack{display:flex;gap:2px;height:14px;border-radius:7px;overflow:hidden;margin:10px 0 6px}
+    .rpaper .rp-stack i{display:block;height:100%}
+    .rpaper .rp-lg{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:9pt;color:#4A4950}
+    .rpaper .rp-lg b{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+    .rpaper .rp-br{display:grid;grid-template-columns:minmax(0,1fr) 30% 180px;gap:10px;align-items:center;padding:4px 0;border-top:1px solid #F0EEEA;page-break-inside:avoid}
+    .rpaper .rp-bn{font-size:9pt} .rpaper .rp-bv{font-size:9pt;color:#4A4950;white-space:nowrap}
+    .rpaper .rp-bt{position:relative;height:8px;border-radius:4px;background:#EDEBE7}
+    .rpaper .rp-bt i{position:absolute;left:0;top:0;bottom:0;border-radius:4px;background:#232227}
+    .rpaper .rp-bt em{position:absolute;top:-3px;bottom:-3px;width:2px;background:#B83434}
+    .rpaper .rp-up{display:inline-block;margin-left:4px;padding:0 6px;border-radius:999px;background:#FDF3DE;color:#8A5F0A;font-size:8pt;font-weight:700}
+    .rpaper .rp-note9{font-size:8.5pt;color:#6D6B72;margin-top:4px}
+    .rpaper .rp-q{border:1px solid #E5E3DF;border-radius:8px;padding:8px 10px;margin:6px 0;page-break-inside:avoid}
+    .rpaper .rp-q.bad{border-color:#E8C3B4;background:#FEF9F7} .rpaper .rp-n{font-size:7.5pt;color:#98969C;font-weight:800;letter-spacing:.08em}
+    .rpaper .rp-t{font-weight:700;margin:2px 0 5px} .rpaper .rp-r{font-size:9.5pt;margin:2px 0}
+    .rpaper .rp-lbl{color:#6D6B72;display:inline-block;min-width:118px} .rpaper a{color:#C84E17} .rpaper .rp-src{color:#6D6B72;font-size:8.5pt}
+    .rpaper .rp-mn{margin-top:5px;font-size:8.5pt;color:#14795A;font-weight:600}
+    .rpaper ol{margin:4px 0 0 18px;padding:0} .rpaper li{margin:3px 0}
+    @media (max-width:600px){ .rpaper .rp-tiles{grid-template-columns:repeat(2,1fr);} .rpaper .rp-br{grid-template-columns:1fr;gap:4px;} }
+    @page{size:A4;margin:14mm 12mm}`;
+
+  const scale = `<div class="rp-scale"><i style="width:${Math.min(100, a.percent)}%"></i>
+      <em style="left:60%"></em><em style="left:90%"></em>
+      <span style="left:60%">60% — пересдача</span><span style="left:90%">90% — сдано</span></div>`;
+  const head = full ? `<h1>Отчёт по экзамену — ${esc(a.fio)}</h1>
+    <div class="rp-meta">Сдан ${new Date(a.finishedAt).toLocaleString("ru-RU")} · время ${Math.round((a.durationSec || 0) / 60)} мин${a.overtimeSec ? " (превышение " + Math.round(a.overtimeSec / 60) + " мин)" : ""} · выходов со страницы ${(a.away && a.away.count) || 0}</div>
+    <div class="rp-hero"><div class="rp-big">${a.percent}%</div>
+      <div><span class="rp-vd ${vcls}">${esc(a.verdict)}</span><div class="rp-note9">${a.score} из ${a.max} баллов${cnt.rev ? " · " + cnt.rev + " на ручной проверке, в процент пока не входят" : ""}</div></div></div>
+    ${scale}
+    <div class="rp-tiles">
+      <div class="rp-tile"><b>${cnt.ok}</b><span>верно</span></div><div class="rp-tile"><b>${cnt.part}</b><span>частично</span></div>
+      <div class="rp-tile"><b>${cnt.bad}</b><span>неверно</span></div><div class="rp-tile"><b>${cnt.rev}</b><span>на ручной проверке</span></div></div>
+    <div class="rp-stack">${seg("ok", "верно")}${seg("part", "частично")}${seg("rev", "на проверке")}${seg("bad", "неверно")}</div>
+    <div class="rp-lg">${legend("ok", "верно")}${legend("part", "частично")}${legend("rev", "на проверке")}${legend("bad", "неверно")}</div>
+    ${manual.length ? `<div class="rp-note9">✎ Ручных правок баллов: ${manual.length} — отмечены в заданиях ниже.</div>` : ""}
+    <h2>Результат по блокам</h2>
+    <div class="rp-note9">Полоса — процент баллов по блоку, красная черта — порог 90%.</div>${bars(blocks)}
+    ${weak.length ? `<h2>Слабые места</h2><ol>${weak.slice(0, 3).map(b => `<li><b>${blockNum(b.n)}. ${esc(b.title)}</b> — ${pctOf(b)}%${errByBlock[b.n] ? ", ошибок " + errByBlock[b.n] : ""}</li>`).join("")}</ol>` : ""}
+    <h2>Ответы по заданиям</h2>`
+  : `<h1>Разбор экзамена — ${esc(a.fio)}</h1>
+    <div class="rp-meta">${new Date(a.finishedAt).toLocaleDateString("ru-RU")} · этот разбор показывает, где были ошибки и что повторить</div>
+    <div class="rp-hero"><div class="rp-big">${a.percent}%</div>
+      <div><span class="rp-vd ${vcls}">${esc(a.verdict)}</span><div class="rp-note9">Ошибок: ${wrong.length} из ${a.total || all.length} заданий</div></div></div>
+    ${scale}
+    <div class="rp-stack">${seg("ok", "верно")}${seg("part", "частично")}${seg("rev", "на проверке")}${seg("bad", "неверно")}</div>
+    <div class="rp-lg">${legend("ok", "верно")}${legend("part", "частично")}${legend("bad", "неверно")}${cnt.rev ? legend("rev", "проверяет руководитель") : ""}</div>
+    ${weak.length ? `<h2>Где подтянуть</h2><div class="rp-note9">Блоки, где результат ниже 90%. Красная черта — порог.</div>${bars(weak)}
+      <h2>С чего начать</h2><ol>${weak.slice(0, 3).map(b => `<li><b>${blockNum(b.n)}. ${esc(b.title)}</b> — ${b.got / b.max < 0.6 ? "стоит пройти блок заново." : "повторите материал и разберите ошибки ниже."}</li>`).join("")}</ol>` : ""}
+    <h2>Задания с ошибками (${wrong.length})</h2>`;
+
+  const cards = items.map((r, i) => `<div class="rp-q ${r.correct === true ? "" : "bad"}">
+      <div class="rp-n">№${full ? i + 1 : r.n || all.indexOf(r) + 1} · блок ${blockNum(r.block)} · ${r.points}/${r.max} балла${r.needsReview ? " · на ручной проверке" : ""}</div>
+      <div class="rp-t">${esc(r.text || r.id)}</div>
+      <div class="rp-r"><span class="rp-lbl">${full ? "Ответ:" : "Ваш ответ:"}</span> ${esc(r.givenText || "— нет ответа —")}</div>
+      <div class="rp-r"><span class="rp-lbl">${full ? "Эталон:" : "Как должно быть:"}</span> ${esc(r.right || "")}</div>
+      ${!full && r.explain ? `<div class="rp-r"><span class="rp-lbl">Почему:</span> ${esc(r.explain)}</div>` : ""}
+      ${r.ai && r.ai.comment ? `<div class="rp-r"><span class="rp-lbl">${full ? "Проверка ИИ:" : "Комментарий:"}</span> ${esc(r.ai.comment)}${r.ai.miss && r.ai.miss.length ? " Не хватает: " + esc(r.ai.miss.join("; ")) : ""}</div>` : ""}
+      ${r.sim && (r.sim.notes || []).length ? `<div class="rp-r"><span class="rp-lbl">Что не так:</span> ${esc(r.sim.notes.join("; "))}</div>` : ""}
+      <div class="rp-r"><span class="rp-lbl">Где посмотреть:</span> ${where(r)}</div>
+      ${manualNote(r)}</div>`);
+  const body = cards.join("") || `<p>Ошибок нет — отличный результат.</p>`;
+
+  const title = (full ? "Отчёт по экзамену" : "Разбор экзамена") + " — " + a.fio;
+  return { css: css, head: head, cards: cards, body: body, title: title };
+}
 function printReport(a, mode) {
   const full = mode === "full";
-  const wrong = (a.answers || []).filter(r => r.correct !== true);
-  const items = full ? (a.answers || []) : wrong;
-  const weak = (a.byBlock || []).filter(b => b.max && b.got / b.max < 0.9).sort((x, y) => x.got / x.max - y.got / y.max);
-  const css = `body{font-family:Manrope,Arial,sans-serif;color:#232227;font-size:10.5pt;line-height:1.45;margin:24px}
-    h1{font-size:19pt;margin:0 0 4px} h2{font-size:12pt;margin:18px 0 6px;border-top:2px solid #232227;padding-top:8px}
-    .meta{color:#4A4950;font-size:9.5pt;margin-bottom:10px} table{width:100%;border-collapse:collapse;font-size:9.5pt}
-    th{text-align:left;font-size:7.5pt;letter-spacing:.1em;text-transform:uppercase;color:#98969C;padding:4px 6px}
-    td{padding:4px 6px;border-top:1px solid #E5E3DF} .q{border:1px solid #E5E3DF;border-radius:8px;padding:8px 10px;margin:6px 0;page-break-inside:avoid}
-    .q.bad{border-color:#E8C3B4;background:#FEF9F7} .n{font-size:7.5pt;color:#98969C;font-weight:800;letter-spacing:.08em}
-    .t{font-weight:700;margin:2px 0 5px} .r{font-size:9.5pt;margin:2px 0} .lbl{color:#6D6B72;display:inline-block;min-width:92px}
-    @page{size:A4;margin:14mm 12mm}`;
-  const head = `<h1>${full ? "Отчёт по экзамену" : "Разбор экзамена"} — ${esc(a.fio)}</h1>
-    <div class="meta">Дата: ${new Date(a.finishedAt).toLocaleString("ru-RU")} · Результат: <b>${a.percent}%</b> (${a.score} из ${a.max}) ·
-      Итог: <b>${esc(a.verdict)}</b>${full ? ` · Время: ${Math.round((a.durationSec || 0) / 60)} мин · Выходов со страницы: ${(a.away && a.away.count) || 0}` : ""}</div>
-    ${!full && weak.length ? `<h2>С чего начать подготовку</h2><ol>${weak.map(b => `<li><b>${blockNum(b.n)}. ${esc(b.title)}</b> — ${Math.round(b.got / b.max * 100)}%. ${b.got / b.max < 0.6 ? "Блок нужно пройти заново." : "Повторите материал и разберите ошибки ниже."}</li>`).join("")}</ol>` : ""}
-    ${full ? `<h2>Результат по блокам</h2><table><tr><th>Блок</th><th>Баллы</th><th>%</th></tr>
-      ${(a.byBlock || []).slice().sort((x, y) => blockNum(x.n) - blockNum(y.n)).map(b => `<tr><td>${blockNum(b.n)}. ${esc(b.title)}</td><td>${b.got} / ${b.max}</td><td>${b.max ? Math.round(b.got / b.max * 100) : 0}%</td></tr>`).join("")}</table>` : ""}
-    <h2>${full ? "Ответы по заданиям" : `Разбор заданий с ошибками (${wrong.length})`}</h2>`;
-  const body = items.map((r, i) => `<div class="q ${r.correct === true ? "" : "bad"}">
-      <div class="n">№${i + 1} · блок ${blockNum(r.block)} · ${esc(r.difficulty || r.type)} · ${r.points}/${r.max} балла</div>
-      <div class="t">${esc(r.text || r.id)}</div>
-      <div class="r"><span class="lbl">${full ? "Ответ:" : "Ваш ответ:"}</span> ${esc(r.givenText || "")}</div>
-      ${full ? `<div class="r"><span class="lbl">Эталон:</span> ${esc(r.right || "")}</div>` : ""}
-      ${r.ai ? `<div class="r"><span class="lbl">Комментарий:</span> ${esc(r.ai.comment || "")}${r.ai.miss && r.ai.miss.length ? " Не хватает: " + esc(r.ai.miss.join("; ")) : ""}</div>` : ""}
-      ${r.sim ? `<div class="r"><span class="lbl">Что не так:</span> ${esc((r.sim.notes || []).join("; "))}</div>` : ""}
-      ${!full ? `<div class="r"><span class="lbl">Как правильно:</span> ${esc(r.explain || "")}</div>` : ""}
-      <div class="r"><span class="lbl">Где смотреть:</span> ${esc(r.source || "")}</div></div>`).join("");
+  const { css, head, cards, body, title } = reportParts(a, mode);
   const v = el("div", "viewer report");
   v.innerHTML = `<div class="vhead"><b>${full ? "Отчёт для руководителя" : "Разбор для сотрудника"} — ${esc(a.fio)}</b>
-      <button type="button" data-a="print">Печать / сохранить PDF</button>
+      <button type="button" data-a="pdf">Скачать PDF</button>
+      <button type="button" data-a="print">Печать</button>
       <button type="button" data-a="close">Закрыть</button></div>
     <div class="rpaper"><style>${css}</style>${head}${body}</div>`;
   v.querySelector('[data-a="close"]').onclick = () => v.remove();
   v.querySelector('[data-a="print"]').onclick = () => {
-    /* раньше страницу пересобирали и перезагружали — при отмене печати кабинет терял место.
-       Теперь печатается только отчёт, а страница остаётся как была. */
+    /* печатается только отчёт, страница кабинета остаётся как была */
     const снять = () => document.body.classList.remove("printing");
     document.body.classList.add("printing");
     window.addEventListener("afterprint", снять, { once: true });
-    setTimeout(снять, 60000);                  /* если браузер не сообщит об окончании печати */
+    setTimeout(снять, 60000);
     window.print();
   };
+  v.querySelector('[data-a="pdf"]').onclick = once(async () => {
+    const name = title.replace(/[\\/:*?"<>|]/g, " ") + " " + dayRu(a.finishedAt) + ".pdf";
+    try { await reportPdf([head].concat(cards.length ? cards : [body]), css, name); toast("PDF сохранён в «Загрузки»"); }
+    catch (e) { fail(e); }
+  });
   document.body.appendChild(v);
 }
 
 /* ---------- сотрудники ---------- */
 const userStatus = u => u.archived ? "archived" : u.active === false ? "blocked" : "active";
+/* этап: МОПО по умолчанию «учится», РОПы и разработчики — «работает» */
+const userStage = u => u.stage === "work" || u.stage === "study" ? u.stage : ((u.role || "employee") === "employee" ? "study" : "work");
 const STATUS_TAG = { active: '<span class="tag ok">работает</span>', blocked: '<span class="tag fail">доступ закрыт</span>',
-                     archived: '<span class="tag">в архиве</span>' };
+                     archived: '<span class="tag">удалён</span>', study: '<span class="tag wait">учится</span>',
+                     work: '<span class="tag ok">работает</span>' };
+const statusTag = u => { const st = userStatus(u); return STATUS_TAG[st === "active" ? userStage(u) : st]; };
 /* надёжный пароль: 12 знаков из случайного набора, без похожих 0/O и 1/l/I, обязательно заглавная, строчная, цифра и знак */
 function genPassword() {
   const sets = ["ABCDEFGHJKLMNPQRSTUVWXYZ", "abcdefghijkmnpqrstuvwxyz", "23456789", "!@#$%*-_+?"];
@@ -345,7 +810,7 @@ async function admUsers() {
     (shown.length ? shown.map((u, i) => `<tr class="${u.archived ? "arch" : ""}"><td><span class="ucell">${avatarHtml(u, 26)}${esc(u.fio)}</span></td><td>${esc(u.login)}</td>
       <td>${roleName(u)}</td><td>${u.email ? `<a href="mailto:${esc(u.email)}">${esc(u.email)}</a>` : '<span class="hint">—</span>'}</td>
       <td>${u.birthday ? fmtDate(u.birthday) : '<span class="hint">—</span>'}</td>
-      <td>${STATUS_TAG[userStatus(u)]}${u.locked ? '<div><span class="tag fail">вход заблокирован</span></div>' : ""}${u.archived && u.archivedAt ? `<div class="hint tiny">с ${dayRu(u.archivedAt)}</div>` : ""}</td>
+      <td>${statusTag(u)}${u.locked ? '<div><span class="tag fail">вход заблокирован</span></div>' : ""}${u.archived && u.archivedAt ? `<div class="hint tiny">с ${dayRu(u.archivedAt)}</div>` : ""}</td>
       <td><button class="btn small white" data-i="${i}" type="button">Управлять</button></td></tr>`).join("")
     : `<tr><td colspan="7" class="hint">${ADM.users === "arch" ? "В архиве пока никого." : "Сотрудников пока нет."}</td></tr>`);
   host.querySelector("#utbl").appendChild(t);
@@ -358,7 +823,7 @@ function userForm(u, reset) {
   const st = u ? userStatus(u) : "active", self = u && APP.user && u.id === APP.user.id;
   back.innerHTML = `<div class="modal" role="dialog" aria-modal="true" style="max-width:560px">
     <b>${u ? esc(u.fio) : dev ? "Новая учётная запись" : "Новый МОПО"}</b>
-    ${u ? `<div class="ustat">${STATUS_TAG[st]}${u.locked ? ' <span class="tag fail">вход заблокирован</span>' : ""}</div>` : ""}
+    ${u ? `<div class="ustat">${statusTag(u)}${u.locked ? ' <span class="tag fail">вход заблокирован</span>' : ""}</div>` : ""}
     ${u && u.locked ? `<div class="note warn">Вход закрыт после 5 неверных попыток пароля${u.lockedAt ? " — " + esc(dayRu(u.lockedAt)) : ""}.
       ${dev ? "Чтобы снять: сгенерируйте новый пароль и сохраните — блокировка снимется, пароль передайте сотруднику."
             : "Снять блокировку может только разработчик — напишите ему во «Вопросы разработчику»."}</div>` : ""}
@@ -374,13 +839,20 @@ function userForm(u, reset) {
     ${dev ? `<select id="urole"><option value="employee">МОПО</option><option value="admin">РОП</option><option value="dev">Разработчик</option></select>`
           : `<input type="text" value="МОПО" disabled><input type="hidden" id="urole" value="employee">
              <p class="hint tiny">РОПов заводит разработчик.</p>`}
+    ${!self ? `<label class="f">Статус</label>
+    <select id="ustage">
+      <option value="study">Учится — блоки открываются по очереди</option>
+      <option value="work">Работает — действующий МОПО, открыты все уроки</option>
+      ${u ? '<option value="gone">Удалён — в архив</option>' : ""}
+    </select>
+    <p class="hint tiny">«Работает» — тот же кабинет МОПО, только без очереди: все блоки доступны сразу, чтобы возвращаться к нужному.
+      «Удалён» — сотрудник исчезает из учеников и не может войти, но прогресс и ответы хранятся: вернуть можно в любой момент.</p>` : ""}
     <div class="mbtns"><button class="btn ghost" data-a="0" type="button">Отмена</button>
       <button class="btn" data-a="1" type="button">Сохранить</button></div>
     ${u && !self ? `<div class="udanger">
       <div class="flab">Доступ</div>
       ${st === "active" ? `<button class="btn small white" data-s="blocked" type="button">Закрыть доступ</button>
-          <button class="btn small white" data-s="archived" type="button">Перенести в архив</button>
-          <p class="hint tiny">«Закрыть доступ» — вход заблокирован, в учениках остаётся. «Архив» — для ушедших: скрыт из учеников, прогресс и ответы хранятся, можно вернуть.</p>` : ""}
+          <p class="hint tiny">«Закрыть доступ» — вход заблокирован, в учениках остаётся. Для ушедших выберите статус «Удалён» выше.</p>` : ""}
       ${st === "blocked" ? `<button class="btn small green" data-s="active" type="button">Открыть доступ</button>
           <button class="btn small white" data-s="archived" type="button">Перенести в архив</button>` : ""}
       ${st === "archived" ? `<button class="btn small green" data-s="active" type="button">Вернуть из архива</button>
@@ -389,6 +861,7 @@ function userForm(u, reset) {
     </div>` : ""}</div>`;
   document.body.appendChild(back); lockScroll(true);
   if (u && dev) back.querySelector("#urole").value = u.role || "employee";
+  if (back.querySelector("#ustage")) back.querySelector("#ustage").value = u ? (st === "archived" ? "gone" : userStage(u)) : "study";
   const pass = back.querySelector("#upass"), copy = back.querySelector("#ucopy");
   if (reset) { pass.value = genPassword(); copy.hidden = false; setTimeout(() => pass.select(), 30); }
   back.querySelector("#ugen").onclick = () => { pass.value = genPassword(); copy.hidden = false; pass.select(); };
@@ -399,16 +872,27 @@ function userForm(u, reset) {
   const close = () => { back.remove(); lockScroll(false); };
   back.querySelector('[data-a="0"]').onclick = close;
   back.querySelector('[data-a="1"]').onclick = once(async () => {
+    const выбор = back.querySelector("#ustage") ? back.querySelector("#ustage").value : "";
     const d = { id: u ? u.id : "", fio: back.querySelector("#ufio").value.trim(), login: back.querySelector("#ulogin").value.trim(),
       password: pass.value, role: back.querySelector("#urole").value };
+    if (выбор === "study" || выбор === "work") d.stage = выбор;
     if (!d.fio || (!u && (!d.login || !d.password))) { toast("Заполните имя, логин и пароль"); return; }
     if (u && dev && !d.login) { toast("Логин не может быть пустым"); return; }
     if (u && dev && /\s/.test(d.login)) { toast("В логине не должно быть пробелов"); return; }
     const логинСменили = u && dev && d.login.toLowerCase() !== String(u.login).toLowerCase();
     if (d.password && d.password.length < 6) { toast("Пароль — минимум 6 знаков. Нажмите «Сгенерировать»"); return; }
+    if (u && выбор === "gone" && st !== "archived" && !await ask({ title: "Удалить сотрудника?",
+        text: "Сотрудник пропадёт из списка учеников и не сможет войти. Всё, что он прошёл, сохранится — вернуть можно в любой момент в «Архиве».",
+        ok: "Удалить", danger: true })) return;
     try {
-      await api("admin.userSave", { data: d }); close(); admUsers(); refreshBadges();
-      toast(логинСменили ? "Логин изменён на «" + d.login + "» — передайте его сотруднику"
+      await api("admin.userSave", { data: d });
+      /* «Удалён» — это архив; из архива обратно — возвращаем доступ */
+      if (u && выбор === "gone" && st !== "archived") await api("admin.userStatus", { id: u.id, status: "archived" });
+      else if (u && выбор && выбор !== "gone" && st === "archived") await api("admin.userStatus", { id: u.id, status: "active" });
+      close(); admUsers(); refreshBadges();
+      toast(u && выбор === "gone" && st !== "archived" ? "Сотрудник удалён — он в «Архиве», вернуть можно там же"
+        : u && выбор !== "gone" && st === "archived" ? "Сотрудник возвращён из архива"
+        : логинСменили ? "Логин изменён на «" + d.login + "» — передайте его сотруднику"
         : d.password ? "Сохранено — передайте новый пароль сотруднику" : "Сохранено");
     } catch (e) { fail(e); }
   });
@@ -537,12 +1021,15 @@ async function admMaterials(local) {                 /* local — своя ко�
   let d;
   let exams = { topics: {}, excluded: [] }, base = {};
   try {
-    d = local || await matData(); await quizData();
+    /* четыре запроса подряд на сервере Google — это десятки секунд; спрашиваем разом */
+    const [d0, , exams0, base0] = await Promise.all([
+      local ? Promise.resolve(local) : matData(), quizData(), api("admin.examList"), examBaseCounts()
+    ]);
+    d = d0; exams = exams0; base = base0;
     if (local) {                                   /* свою копию тоже пересортируем: порядок мог поменяться */
       d.lessons = d.lessons.slice().sort((a, b) => (a.block - b.block) || (Number(a.order) - Number(b.order)));
       d.subs = d.subs.slice().sort((a, b) => (a.block - b.block) || (Number(a.order) - Number(b.order)));
     }
-    exams = await api("admin.examList"); base = await examBaseCounts();
   } catch (e) { return fail(e); }
   const box = $("#ltbl"); box.innerHTML = "";
   const quizInfo = id => { const q = QZ.data && QZ.data.quizzes[id]; return q ? plural(q.questions.length, "вопрос", "вопроса", "вопросов") + " · порог " + q.pass : "мини-тест"; };
@@ -665,7 +1152,7 @@ function lessonForm(l, d) {
     </div>
     <div class="mf-right"><div class="flab">Как увидит сотрудник</div><div id="lprev"></div>
       <p class="pv-hint">Жёлтую строку можно перетащить мышкой — поле «Где поставить» поменяется само.</p></div></div>
-    <div class="mbtns">${l && canDelMat(l) ? '<button class="btn red" data-a="del" type="button" style="margin-right:auto">Удалить материал</button>' : ""}
+    <div class="mbtns">${l && canDelMat(l) ? '<button class="btn red" data-a="del" type="button" style="margin-right:auto"><span class="lbl-long">Удалить материал</span><span class="lbl-short">Удалить</span></button>' : ""}
       <button class="btn ghost" data-a="0" type="button">Отмена</button>
       <button class="btn" data-a="1" type="button">Сохранить</button></div></div>`;
   document.body.appendChild(back); lockScroll(true);
@@ -843,7 +1330,8 @@ function lessonForm(l, d) {
          повторяем тот же расчёт у себя, чтобы список встал на место сразу */
       if (переставили) { matReorder(d.lessons, l ? l : d.lessons[d.lessons.length - 1], data.after); }
       admMaterials(d);
-      if (переставили) setTimeout(() => admMaterials(), 400);      /* и следом сверяемся с сервером */
+      /* сверку с сервером делает общий фоновой запрос (adminPrefetch) — отдельный тяжёлый
+         запрос за материалами здесь только тормозил вкладку */
       toast(переставили && l ? "Сохранено — материал на новом месте" : "Сохранено");
     } catch (e) { btn.disabled = false; btn.textContent = "Сохранить"; fail(e); }
   });

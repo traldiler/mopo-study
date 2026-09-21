@@ -1,11 +1,13 @@
 /* Экзамен в кабинете: вопросы приходят из data/exam.json (без ответов),
    проверку и подсчёт баллов делает сервер. */
-const EX = { data: null, answers: {}, times: {}, cur: 0, startedAt: 0, away: { count: 0, sec: 0, since: 0 }, running: false };
-const LSKEY = () => "mopo-exam-draft-" + (APP.user ? APP.user.id : "x");
+const EX = { data: null, answers: {}, times: {}, cur: 0, startedAt: 0, away: { count: 0, sec: 0, since: 0 }, running: false,
+             mode: "exam", retakeId: "" };
+/* черновик ответов в браузере: у пересдачи свой, чтобы не смешаться с основным экзаменом */
+const LSKEY = () => (EX.mode === "retake" ? "mopo-retake-draft-" + EX.retakeId + "-" : "mopo-exam-draft-") + (APP.user ? APP.user.id : "x");
 
 /* исходный экзамен + вопросы тем, добавленные в «Материалах»; разделы идут в порядке блоков программы */
 async function examData() {
-  if (EX.data) return EX.data;
+  if (EX.data && !EX.data.retake) return EX.data;
   const d = JSON.parse(await matLoad("data/exam.json"));
   try { if (!PR.program) PR.program = await api("program"); } catch (e) { /* без программы — исходный порядок */ }
   let extra = [], off = new Set();
@@ -48,6 +50,7 @@ function exSave() { try { localStorage.setItem(LSKEY(), JSON.stringify({ answers
 
 /* ---------- экран «до экзамена» ---------- */
 async function screenExamIntro() {
+  if (EX.mode === "retake") { EX.mode = "exam"; EX.retakeId = ""; EX.data = null; }
   $("#htitle").textContent = "Экзамен";
   $("#timer").hidden = true;
   const d = await examData();
@@ -73,6 +76,50 @@ async function screenExamIntro() {
   if (draft) $("#exnew").onclick = async () => {
     if (!await ask({ title: "Начать заново", danger: true, ok: "Стереть и начать", text: "Сохранённые ответы будут удалены, время пойдёт с нуля." })) return;
     localStorage.removeItem(LSKEY()); screenExamIntro();
+  };
+}
+
+/* ---------- индивидуальная пересдача: задания по ошибкам, собранные руководителем ---------- */
+async function retakeData(info) {
+  const r = await api("retake.start");
+  try { if (!PR.program) PR.program = await api("program"); } catch (e) { /* без названий блоков */ }
+  const prog = (PR.program && PR.program.blocks) || [], title = n => (prog.filter(b => Number(b.n) === Number(n))[0] || {}).title || "Блок " + blockNum(n);
+  const pos = n => { const i = prog.findIndex(b => Number(b.n) === Number(n)); return i < 0 ? 999 : i; };
+  const by = {};
+  (r.questions || []).forEach(q => {
+    const b = by[q.block] || (by[q.block] = { n: q.block, title: title(q.block), short: title(q.block), questions: [] });
+    b.questions.push({ id: q.id, type: q.type, text: q.text, points: Number(q.points) || 1, b: q.block, opts: q.opts || [] });
+  });
+  return { retake: true, id: r.id, version: "retake", minutes: r.minutes || info.minutes || 30, pass: 0.9, schemes: {},
+           blocks: Object.keys(by).map(k => by[k]).sort((x, y) => pos(x.n) - pos(y.n) || blockNum(x.n) - blockNum(y.n)) };
+}
+async function screenRetakeIntro(info) {
+  EX.mode = "retake"; EX.retakeId = info.id;
+  if (!(EX.data && EX.data.retake && EX.data.id === info.id)) EX.data = null;
+  $("#htitle").textContent = "Экзамен";
+  $("#timer").hidden = true;
+  const draft = (() => { try { return JSON.parse(localStorage.getItem(LSKEY()) || "null"); } catch (_) { return null; } })();
+  $("#app").innerHTML = `<div class="card retake-card">
+    <div class="qhead"><div><h3>Руководитель открыл</h3><h2>Индивидуальная пересдача</h2></div><div class="chip">${info.count} заданий</div></div>
+    <p class="lead">Задания составлены по материалам уроков, больше всего — по темам, где в экзамене было больше ошибок. Почти все вопросы новые.
+      ${plural(info.count, "задание", "задания", "заданий")}, время — 2 часа, как у экзамена. Порог сдачи — 90%.</p>
+    <div class="note"><b>Как это работает.</b> Ответы сохраняются в браузере: если страница закроется, работа не потеряется.
+      Время фиксируется, но пересдача не обрывается — после 2 часов появится только отметка о превышении. Проверка идёт на сервере.</div>
+    <div class="note warn"><b>Пока идёт пересдача, разбор прошлой попытки закрыт.</b> Он снова появится здесь после отправки ответов.</div>
+    <div class="foot">
+      <button class="btn" id="rtgo" type="button">${draft ? "Продолжить пересдачу" : "Начать пересдачу"}</button>
+      ${draft ? '<button class="btn ghost" id="rtnew" type="button">Начать заново</button>' : ""}
+    </div></div>`;
+  $("#rtgo").onclick = once(async () => {
+    try { if (!EX.data) EX.data = await retakeData(info); } catch (e) { return fail(e); }
+    if (!exAll().length) return toast("В пересдаче нет заданий — сообщите руководителю");
+    if (draft) { EX.answers = draft.answers || {}; EX.times = draft.times || {}; EX.startedAt = draft.startedAt || Date.now(); EX.away = { count: draft.away.count, sec: draft.away.sec, since: 0 }; }
+    else { EX.answers = {}; EX.times = {}; EX.startedAt = Date.now(); EX.away = { count: 0, sec: 0, since: 0 }; }
+    EX.cur = 0; EX.running = true; exSave(); renderNav(); examScreen();
+  });
+  if (draft) $("#rtnew").onclick = async () => {
+    if (!await ask({ title: "Начать заново", danger: true, ok: "Стереть и начать", text: "Сохранённые ответы пересдачи будут удалены, время пойдёт с нуля." })) return;
+    localStorage.removeItem(LSKEY()); screenRetakeIntro(info);
   };
 }
 
@@ -324,8 +371,11 @@ async function exFinish(silent) {                 /* silent === true — без 
     answers: all.map(q => ({ id: q.id, given: exGiven(q) === undefined ? null : exGiven(q), sec: EX.times[q.id] || 0 }))
   };
   try {
-    const r = await api("exam.submit", { data: payload });
+    const retake = EX.mode === "retake";
+    const r = retake ? await api("retake.submit", { data: Object.assign(payload, { id: EX.retakeId }) })
+                     : await api("exam.submit", { data: payload });
     localStorage.removeItem(LSKEY());
+    if (retake) { EX.data = null; EX.mode = "exam"; EX.retakeId = ""; r.kind = "retake"; }
     exResult(r);
   } catch (e) {
     $("#exst").innerHTML = "Не удалось отправить: " + esc(e.message) + ". Ответы сохранены — нажмите «Отправить ещё раз».";
@@ -335,10 +385,11 @@ async function exFinish(silent) {                 /* silent === true — без 
 }
 function exResult(r) {
   const v = r.verdict === "сдал" ? "ok" : r.verdict === "пересдача" ? "retry" : "fail";
-  const txt = r.verdict === "сдал" ? "Экзамен сдан. Руководитель пришлёт разбор и откроет следующий этап."
-    : r.verdict === "пересдача" ? "Экзамен не сдан, но результат допускает пересдачу. Руководитель пришлёт разбор ошибок."
-    : "Экзамен не сдан. Материал нужно пройти заново — руководитель пришлёт разбор и план подготовки.";
-  $("#app").innerHTML = `<div class="card"><h2>Экзамен завершён</h2>
+  const rt = r.kind === "retake";
+  const txt = r.verdict === "сдал" ? (rt ? "Пересдача сдана." : "Экзамен сдан.") + " Руководитель посмотрит результат и откроет следующий этап."
+    : r.verdict === "пересдача" ? (rt ? "Пересдача не сдана" : "Экзамен не сдан") + ", но результат допускает пересдачу. Руководитель пришлёт разбор ошибок."
+    : (rt ? "Пересдача не сдана." : "Экзамен не сдан.") + " Материал нужно пройти заново — руководитель пришлёт разбор и план подготовки.";
+  $("#app").innerHTML = `<div class="card"><h2>${rt ? "Пересдача завершена" : "Экзамен завершён"}</h2>
     <div class="res">
       <div><b>${r.score} / ${r.max}</b><span>баллов</span></div>
       <div><b>${r.percent}%</b><span>результат</span></div>
@@ -349,7 +400,7 @@ function exResult(r) {
     <table class="bt"><tr><th>Блок</th><th>Баллы</th><th>%</th></tr>
       ${(r.byBlock || []).slice().sort((x, y) => blockNum(x.n) - blockNum(y.n)).map(b => `<tr><td>${blockNum(b.n)}. ${esc(b.title)}</td><td>${b.got} / ${b.max}</td><td>${b.max ? Math.round(b.got / b.max * 100) : 0}%</td></tr>`).join("")}
     </table>
-    <p class="hint">Правильные ответы здесь не показываются — разбор ошибок придёт отдельным файлом от руководителя.</p>
+    <p class="hint">Правильные ответы здесь не показываются. Разбор ошибок появится во вкладке «Экзамен», когда руководитель его отправит.</p>
     ${r.needsReview ? `<div class="note">Часть развёрнутых ответов (${plural(r.needsReview, "задание", "задания", "заданий")}) проверит руководитель вручную — итог может немного измениться.</div>` : ""}
     <div class="foot"><button class="btn" id="exhome" type="button">Вернуться в кабинет</button></div></div>`;
   const home = $("#exhome");
