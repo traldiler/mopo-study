@@ -461,6 +461,19 @@ async function matData() {
   d.lessons = (d.lessons || []).slice().sort((a, b) => (a.block - b.block) || (a.order - b.order));
   return d;
 }
+/* тот же расчёт порядка, что делает сервер: материалы одной темы нумеруются по 10 */
+function matReorder(lessons, me, after) {
+  if (!me) return;
+  const свои = lessons.filter(x => Number(x.block) === Number(me.block) && String(x.sub || "") === String(me.sub || "") && x.id !== me.id)
+    .sort((a, b) => Number(a.order) - Number(b.order));
+  let pos = свои.length;
+  if (after === "start") pos = 0;
+  else if (after === "keep") pos = свои.filter(x => Number(x.order) < Number(me.order)).length;
+  else if (after && after !== "end") { const i = свои.findIndex(x => x.id === after); if (i >= 0) pos = i + 1; }
+  свои.splice(pos, 0, me);
+  свои.forEach((x, i) => x.order = (i + 1) * 10);
+}
+
 /* удалять: разработчик — всё, РОП — только то, что добавил сам */
 const canDelMat = row => APP.user.role === "dev" || (!!row.createdBy && row.createdBy === APP.user.id);
 /* удаление с выбором: «Спрятать» (зелёная — ничего не теряется) или «Удалить» навсегда */
@@ -525,6 +538,10 @@ async function admMaterials(local) {                 /* local — своя ко�
   let exams = { topics: {}, excluded: [] }, base = {};
   try {
     d = local || await matData(); await quizData();
+    if (local) {                                   /* свою копию тоже пересортируем: порядок мог поменяться */
+      d.lessons = d.lessons.slice().sort((a, b) => (a.block - b.block) || (Number(a.order) - Number(b.order)));
+      d.subs = d.subs.slice().sort((a, b) => (a.block - b.block) || (Number(a.order) - Number(b.order)));
+    }
     exams = await api("admin.examList"); base = await examBaseCounts();
   } catch (e) { return fail(e); }
   const box = $("#ltbl"); box.innerHTML = "";
@@ -822,9 +839,11 @@ function lessonForm(l, d) {
       const fields = { block: data.block, sub: data.sub, title: data.title, kind: data.kind, url: data.url, note: data.note, ready: data.ready, active: data.active };
       if (l) Object.assign(l, fields); else d.lessons.push(Object.assign({ id: r.id, order: 99999, createdBy: APP.user.id }, fields));
       close(); PR.program = null;
-      /* порядок пересчитывает сервер: со своей копией список остался бы в прежнем виде,
-         и казалось бы, что перенос не сохранился */
-      if (переставили) admMaterials(); else admMaterials(d);
+      /* порядок пересчитывает сервер, но ждать его ответа 5–10 секунд нельзя:
+         повторяем тот же расчёт у себя, чтобы список встал на место сразу */
+      if (переставили) { matReorder(d.lessons, l ? l : d.lessons[d.lessons.length - 1], data.after); }
+      admMaterials(d);
+      if (переставили) setTimeout(() => admMaterials(), 400);      /* и следом сверяемся с сервером */
       toast(переставили && l ? "Сохранено — материал на новом месте" : "Сохранено");
     } catch (e) { btn.disabled = false; btn.textContent = "Сохранить"; fail(e); }
   });

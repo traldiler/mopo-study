@@ -1690,3 +1690,11 @@ label.f{font-family:var(--f-text); font-size:13px; font-weight:600; letter-spaci
 .viewer.big .vbody{gap:0;}
 .viewer.big .vnotes{display:none;}
 .viewer.big iframe{border-radius:0; height:100%; flex:1 1 auto !important;}   /* в развёрнутом виде материал занимает весь экран */
+
+/* телефон: одиночные кнопки жались к левому краю, справа оставалась пустота */
+@media (max-width:760px){
+  #app .foot > .btn, #app .foot > button.btn, .viewer .foot > .btn{flex:1 1 140px; justify-content:center; text-align:center;}
+  #app .foot{gap:8px;}
+  #app .ni-foot{justify-content:space-between;}
+  #app .card > .foot:last-child{margin-top:14px;}
+}
