@@ -1215,6 +1215,7 @@ h3, .blk h3{font-family:var(--f-mono); font-weight:600; font-size:11.5px; letter
   .top nav .switch{margin:auto 0 4px !important; border:1px solid rgba(255,255,255,.18) !important; color:#fff !important;}
   .top nav .switch:hover{background:rgba(255,255,255,.08) !important;}
   .top nav .out{color:#A9B1C2 !important;}
+  .top nav .switch + .switch{margin-top:0 !important;}          /* у разработчика две кнопки подряд — без дыры между ними */
   .top nav button:not(.switch) ~ .out{margin-top:auto;}
   .top nav .switch ~ .out{margin-top:0;}
   .me{order:3; display:flex !important; align-items:center; gap:10px; margin:12px 0 0; padding:14px 10px 4px; border-top:1px solid rgba(255,255,255,.1);
@@ -1766,3 +1767,4 @@ label.f{font-family:var(--f-text); font-size:13px; font-weight:600; letter-spaci
 .rgrow b{text-align:right;} .rgrow i{color:var(--muted); font-style:normal; font-size:12px;}
 .rtsum{display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:4px 0 12px;} .rtsum b{margin-right:6px;}
 .rtnew{color:var(--green); font-weight:700;}
+.qbar{margin-top:12px;} .qbar input[type=text]{flex:2 1 240px; max-width:none; padding:9px 12px;}

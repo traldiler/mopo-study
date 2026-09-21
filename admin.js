@@ -7,7 +7,7 @@ const ADM_TITLES = { students: "Ученики", attempts: "Экзамены", u
 
 function screenAdmin(tab) {
   if (tab) ADM.tab = tab;
-  if (ADM.tab === "devq" && APP.user.role !== "dev") ADM.tab = "questions";
+  if (ADM.tab === "devq" && !devUI()) ADM.tab = "questions";
   $("#htitle").textContent = ADM_TITLES[ADM.tab] || "Кабинет";
   $("#timer").hidden = true;
   $("#app").innerHTML = `<div id="admbody"></div>`;
@@ -202,7 +202,14 @@ async function admAttempt(id, ready) {
   const host = $("#admbody");
   if (!ready) host.innerHTML = `<div class="card"><p class="lead">Загружаем ответы…</p></div>`;
   let a;
-  try { a = ready || await api("admin.attempt", { id: id }); if (!PR.program) PR.program = await api("program"); } catch (e) { return fail(e); }
+  try {
+    a = ready || await api("admin.attempt", { id: id });
+    /* ответ без самой попытки (сбой Google или старая копия в памяти) — перечитываем мимо кэша, пустой экран не показываем */
+    const полная = x => x && Array.isArray(x.answers) && x.finishedAt;
+    if (!полная(a)) { Object.keys(SWR).forEach(k => { if (k.indexOf("admin.attempt{") === 0) delete SWR[k]; }); a = await apiRaw("admin.attempt", { id: id }); }
+    if (!полная(a)) throw new Error("Сервер прислал попытку без ответов (" + (a ? Object.keys(a).slice(0, 6).join(", ") || "пусто" : "пусто") + "). Обновите страницу и откройте ещё раз");
+    if (!PR.program) PR.program = await api("program");
+  } catch (e) { host.innerHTML = `<div class="card"><p class="lead">${esc(e.message)}</p><div class="foot"><button class="btn ghost" id="aback" type="button">← Ко всем</button></div></div>`; $("#aback").onclick = admAttempts; return fail(e); }
   const byBlock = (a.byBlock || []).slice().sort((x, y) => blockNum(x.n) - blockNum(y.n));
   const vcls = a.verdict === "сдал" ? "ok" : a.verdict === "пересдача" ? "retry" : "fail";
   host.innerHTML = `<div class="card">
@@ -725,7 +732,7 @@ function reportParts(a, mode, opts) {
       ${r.sim && (r.sim.notes || []).length ? `<div class="rp-r"><span class="rp-lbl">Что не так:</span> ${esc(r.sim.notes.join("; "))}</div>` : ""}
       <div class="rp-r"><span class="rp-lbl">Где посмотреть:</span> ${where(r)}</div>
       ${manualNote(r)}</div>`);
-  const body = cards.join("") || `<p>Ошибок нет — отличный результат.</p>`;
+  const body = cards.join("") || (all.length || a.counts ? `<p>Ошибок нет — отличный результат.</p>` : `<p>По этой попытке нет данных об ответах.</p>`);
 
   const title = (full ? "Отчёт по экзамену" : "Разбор экзамена") + " — " + a.fio;
   return { css: css, head: head, cards: cards, body: body, title: title };
@@ -736,18 +743,9 @@ function printReport(a, mode) {
   const v = el("div", "viewer report");
   v.innerHTML = `<div class="vhead"><b>${full ? "Отчёт для руководителя" : "Разбор для сотрудника"} — ${esc(a.fio)}</b>
       <button type="button" data-a="pdf">Скачать PDF</button>
-      <button type="button" data-a="print">Печать</button>
       <button type="button" data-a="close">Закрыть</button></div>
     <div class="rpaper"><style>${css}</style>${head}${body}</div>`;
   v.querySelector('[data-a="close"]').onclick = () => v.remove();
-  v.querySelector('[data-a="print"]').onclick = () => {
-    /* печатается только отчёт, страница кабинета остаётся как была */
-    const снять = () => document.body.classList.remove("printing");
-    document.body.classList.add("printing");
-    window.addEventListener("afterprint", снять, { once: true });
-    setTimeout(снять, 60000);
-    window.print();
-  };
   v.querySelector('[data-a="pdf"]').onclick = once(async () => {
     const name = title.replace(/[\\/:*?"<>|]/g, " ") + " " + dayRu(a.finishedAt) + ".pdf";
     try { await reportPdf([head].concat(cards.length ? cards : [body]), css, name); toast("PDF сохранён в «Загрузки»"); }
@@ -774,15 +772,16 @@ function genPassword() {
   return out.join("");
 }
 async function admUsers() {
-  const dev = APP.user.role === "dev";
+  const dev = devUI();
   const host = $("#admbody");
   host.innerHTML = `<div class="card"><div class="qhead"><div><h2>${dev ? "Сотрудники: РОПы и МОПО" : "Сотрудники"}</h2>
     <p class="lead">${dev ? "Все учётные записи платформы. Здесь же видны МОПО, которых завели РОПы."
-      : "Заведите МОПО и выдайте логин и пароль. Если человек ушёл — закройте доступ или перенесите в архив: прогресс сохранится."}</p></div>
+      : "Здесь все, у кого есть доступ к кабинету. Заводить и менять вы можете МОПО: выдать логин и пароль, сменить статус, закрыть доступ или перенести в архив — прогресс сохранится. РОПов и разработчиков меняет разработчик."}</p></div>
     <button class="btn" id="uadd" type="button">${dev ? "Добавить" : "Добавить МОПО"}</button></div>
     <div id="ureset"></div><div class="seg wide" id="useg"></div><div id="utbl"></div></div>`;
   let list = [], resets = [];
   try { list = (await api("admin.users")).users || []; resets = (await api("admin.resets")).resets || []; } catch (e) { return fail(e); }
+  if (!dev) resets = resets.filter(r => (r.role || "employee") === "employee");   /* пароль РОПам и разработчику выдаёт разработчик */
   if (resets.length) {
     const rb = $("#ureset");
     rb.className = "resets";
@@ -811,14 +810,15 @@ async function admUsers() {
       <td>${roleName(u)}</td><td>${u.email ? `<a href="mailto:${esc(u.email)}">${esc(u.email)}</a>` : '<span class="hint">—</span>'}</td>
       <td>${u.birthday ? fmtDate(u.birthday) : '<span class="hint">—</span>'}</td>
       <td>${statusTag(u)}${u.locked ? '<div><span class="tag fail">вход заблокирован</span></div>' : ""}${u.archived && u.archivedAt ? `<div class="hint tiny">с ${dayRu(u.archivedAt)}</div>` : ""}</td>
-      <td><button class="btn small white" data-i="${i}" type="button">Управлять</button></td></tr>`).join("")
+      <td>${dev || (u.role || "employee") === "employee" ? `<button class="btn small white" data-i="${i}" type="button">Управлять</button>`
+        : '<span class="hint tiny" title="РОПов и разработчиков меняет разработчик">меняет разработчик</span>'}</td></tr>`).join("")
     : `<tr><td colspan="7" class="hint">${ADM.users === "arch" ? "В архиве пока никого." : "Сотрудников пока нет."}</td></tr>`);
   host.querySelector("#utbl").appendChild(t);
   t.querySelectorAll("[data-i]").forEach(b => b.onclick = () => userForm(shown[+b.dataset.i]));
   $("#uadd").onclick = () => userForm(null);
 }
 function userForm(u, reset) {
-  const dev = APP.user.role === "dev";
+  const dev = devUI();
   const back = el("div", "modal-back");
   const st = u ? userStatus(u) : "active", self = u && APP.user && u.id === APP.user.id;
   back.innerHTML = `<div class="modal" role="dialog" aria-modal="true" style="max-width:560px">
@@ -959,7 +959,7 @@ function matReorder(lessons, me, after) {
 }
 
 /* удалять: разработчик — всё, РОП — только то, что добавил сам */
-const canDelMat = row => APP.user.role === "dev" || (!!row.createdBy && row.createdBy === APP.user.id);
+const canDelMat = row => devUI() || (!!row.createdBy && row.createdBy === APP.user.id);
 /* удаление с выбором: «Спрятать» (зелёная — ничего не теряется) или «Удалить» навсегда */
 async function delMaterial(kind, row, d) {
   const inB = l => Number(l.block) === Number(row.n), inS = l => String(l.sub) === String(row.id);
@@ -1016,7 +1016,7 @@ async function admMaterials(local) {                 /* local — своя ко�
   const firstLoad = !$("#ltbl");
   if (firstLoad) host.innerHTML = `<div class="card"><div class="qhead"><div><h2>Материалы кабинета</h2>
     <p class="lead">Видео, конспекты, документы и мини-тесты по блокам и темам. Меняете здесь — сотрудники сразу видят новое.
-      ${APP.user.role === "dev" ? "Удалять можно любые материалы, темы и блоки." : "Удалять можно материалы, темы и блоки, которые добавили вы; спрятать — любые."}</p></div>
+      ${devUI() ? "Удалять можно любые материалы, темы и блоки." : "Удалять можно материалы, темы и блоки, которые добавили вы; спрятать — любые."}</p></div>
     <button class="btn" id="ladd" type="button">Добавить материал</button></div><div id="ltbl"><p class="hint">Загружаем…</p></div></div>`;
   let d;
   let exams = { topics: {}, excluded: [] }, base = {};
@@ -1351,15 +1351,43 @@ async function admQuestions(box) {
   ADM.qf = ADM.qf || "wait";
   $("#aqseg").innerHTML = `<button type="button" data-f="wait">Ждут ответа <i>${open}</i></button>
     <button type="button" data-f="ans">Отвеченные <i>${list.length - open}</i></button><button type="button" data-f="all">Все <i>${list.length}</i></button>`;
+  /* фильтры: кто спросил, по какому блоку, поиск по тексту, порядок */
+  if (!PR.program) { try { PR.program = await api("program"); } catch (e) { /* без блоков — фильтр по блоку не покажем */ } }
+  const blockOf = q => { const f = q.lessonId && lessonById(q.lessonId); return f ? f.block : null; };
+  const people = [...new Set(list.map(q => q.fio).filter(Boolean))].sort((a, b) => String(a).localeCompare(b));
+  const blocks = ((PR.program && PR.program.blocks) || []).filter(b => list.some(q => { const x = blockOf(q); return x && x.n === b.n; }));
+  const F = ADM.qfl = ADM.qfl || {};
+  const fk = box;                                              /* у «Вопросов МОПО» и «Вопросов РОПов» свои фильтры */
+  F[fk] = F[fk] || { who: "", block: "", q: "", sort: "new" };
+  const S = F[fk];
+  if (list.length) $("#aqseg").insertAdjacentHTML("afterend", `<div class="atbar qbar">
+      <select id="aqwho"><option value="">${dev ? "Все РОПы" : "Все сотрудники"}</option>${people.map(p => `<option>${esc(p)}</option>`).join("")}</select>
+      <select id="aqblk"><option value="">Все блоки</option>${blocks.map(b => `<option value="${esc(b.n)}">${blockNum(b.n)}. ${esc(b.title)}</option>`).join("")}<option value="none">Общие вопросы (без урока)</option></select>
+      <input type="text" id="aqq" placeholder="Поиск по тексту вопроса или ответа">
+      <select id="aqsort"><option value="new">Сначала новые</option><option value="old">Сначала старые</option><option value="fio">По сотруднику (А–Я)</option></select></div>`);
+  if (list.length) {
+    $("#aqwho").value = S.who; $("#aqblk").value = S.block; $("#aqq").value = S.q; $("#aqsort").value = S.sort;
+    $("#aqwho").onchange = e => { S.who = e.target.value; draw(); };
+    $("#aqblk").onchange = e => { S.block = e.target.value; draw(); };
+    $("#aqsort").onchange = e => { S.sort = e.target.value; draw(); };
+    $("#aqq").oninput = e => { S.q = e.target.value; draw(); };
+  }
   const draw = () => {
     $("#aqseg").querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.f === ADM.qf));
     const box2 = $("#qlist"); box2.innerHTML = "";
-    const f = list.filter(q => ADM.qf === "all" || (ADM.qf === "ans" ? q.answer : !q.answer));
-    if (!f.length) { box2.appendChild(el("div", "card", '<p class="hint">Здесь пусто.</p>')); return; }
+    const needle = String(S.q || "").trim().toLowerCase();
+    const f = list.filter(q => ADM.qf === "all" || (ADM.qf === "ans" ? q.answer : !q.answer))
+      .filter(q => !S.who || q.fio === S.who)
+      .filter(q => { if (!S.block) return true; const x = blockOf(q); return S.block === "none" ? !x : x && String(x.n) === S.block; })
+      .filter(q => !needle || [q.text, q.answer, q.lessonTitle, q.fio].join(" ").toLowerCase().includes(needle))
+      .sort((x, y) => S.sort === "old" ? String(x.at).localeCompare(String(y.at))
+        : S.sort === "fio" ? String(x.fio).localeCompare(y.fio) || String(y.at).localeCompare(String(x.at))
+        : String(y.at).localeCompare(String(x.at)));
+    if (!f.length) { box2.appendChild(el("div", "card", `<p class="hint">${S.who || S.block || needle ? "Под эти условия вопросов нет." : "Здесь пусто."}</p>`)); return; }
     f.forEach(q => {
       const c = el("div", "card note-card qitem " + (q.answer ? "answered" : "waiting"));
       c.innerHTML = `<div class="nc-head"><span class="tag ${q.answer ? "ok" : "wait"}">${q.answer ? "отвечен" : "ждёт ответа"}</span>
-          <b>${esc(q.fio)}</b><span class="hint">${esc(q.lessonTitle || "общий вопрос")} · ${esc(dayRu(q.at))}</span></div>
+          <b>От: ${esc(q.fio || "—")}</b><span class="hint">${(() => { const x = blockOf(q); return x ? "блок " + blockNum(x.n) + " · " : ""; })()}${esc(q.lessonTitle || "общий вопрос")} · ${esc(dayRu(q.at))}</span></div>
         <p class="qq">${esc(q.text)}</p>
         ${q.answer ? `<div class="ans"><b>Ответ ${esc(q.answeredBy || "")}:</b><p>${esc(q.answer)}</p></div>` : ""}`;
       if (!q.answer) {
@@ -1382,7 +1410,7 @@ async function admQuestions(box) {
 const PREP = { run: false, stop: false };
 /* ---------- настройки ---------- */
 async function admSettings() {
-  const host = $("#admbody"), dev = APP.user.role === "dev";
+  const host = $("#admbody"), dev = devUI();
   host.innerHTML = `<div class="card"><h2>Настройки</h2>
     <p class="lead">Вопросы РОПу и запросы «Забыли пароль?» всегда приходят в кабинет. Чтобы их увидели быстрее,
       кабинет предложит сотруднику продублировать сообщение в рабочую группу WhatsApp с готовым текстом.</p>
@@ -1489,13 +1517,14 @@ async function admSettings() {
     b.textContent = "Остановить";
     const t0 = Date.now();
     const mmss = ms => (ms >= 60000 ? Math.floor(ms / 60000) + " мин " : "") + Math.round(ms % 60000 / 1000) + " сек";
-    let ready = 0, skip = 0, bad = [], total = 0, from = 0, last = "", pics = 0, picLast = "", picLeft = 0, plan = 0, more = true, note = "запрашиваем список листов…";
+    let ready = 0, skip = 0, bad = [], total = 0, from = 0, last = "", pics = 0, picLast = "", picLeft = 0, plan = 0, more = true, rowsNote = "", note = "запрашиваем список листов…";
     let подряд = 0, молчит = false;                      /* сколько листов подряд сервер не ответил */
     const paint = () => {
       const gone = Date.now() - t0;
       const per = ready ? gone / ready : 0;
       const left = plan ? Math.max(0, plan - ready) : 0;         /* считаем по тем, что реально надо подготовить */
       box.innerHTML = `<p class="hint"><b>Напечатано: ${ready}${plan ? " из " + plan : ""}</b>${skip ? " · пропущено готовых: " + skip : ""}<br>
+        ${rowsNote ? "<b>Длинный лист:</b> " + esc(rowsNote) + "<br>" : ""}
         ${pics ? "<b>Фото добавлено: " + pics + "</b>" + (picLast ? " — лист «" + esc(picLast) + "»" : "") + (picLeft ? ", осталось " + picLeft : "") + "<br>" : ""}
         Идёт ${mmss(gone)}${per && left ? " · осталось примерно " + mmss(per * left) : ""}<br>
         ${esc(note)}${last ? "<br>Последний готовый: " + esc(last) : ""}${bad.length ? "<br>Не получилось: " + bad.length : ""}</p>`;
@@ -1530,6 +1559,8 @@ async function admSettings() {
           if (x.state === "ready" || x.state === "cached") { ready++; last = x.title; }
           else if (x.state === "pics") { pics += (x.added || 0); picLeft = x.left || 0; picLast = x.title;
             if (!x.left) { ready++; last = x.title; }          /* фото досталили — лист готов целиком */ note = "подставляем фото в лист «" + x.title + "»"; }
+          else if (x.state === "more") { rowsNote = "лист «" + x.title + "»: собрано строк " + (x.rows || "…") + (x.rowsAll ? " из " + x.rowsAll : "");
+            note = "длинный лист собираем частями по 600 строк — " + rowsNote; }
           else if (x.state === "skip") skip++;
           else bad.push(x.title + (x.why ? " — " + x.why : ""));
         });
@@ -1679,7 +1710,7 @@ async function drvStatus() {
   const docs = r.files.filter(f => !f.video), vids = r.files.filter(f => f.video);
   const noDoc = docs.filter(f => !f.ok), noVid = vids.filter(f => !f.ok);
   const open = vids.filter(f => f.ok && f.access === "ANYONE_WITH_LINK").length;
-  const dev = APP.user.role === "dev";
+  const dev = devUI();
   box.innerHTML = `<div class="drv">
     <p>Кабинет работает от почты <b class="inl">${esc(r.account || "—")}</b>. Проверено файлов: ${r.files.length} — это материалы программы
       и документы, на которые они ссылаются изнутри (их сервис тоже открывает сотруднику).</p>

@@ -376,6 +376,8 @@ async function exFinish(silent) {                 /* silent === true — без 
                      : await api("exam.submit", { data: payload });
     localStorage.removeItem(LSKEY());
     if (retake) { EX.data = null; EX.mode = "exam"; EX.retakeId = ""; r.kind = "retake"; }
+    else if (PR.progress) { PR.progress.examAllowed = false; PR.progress.examForce = false; }   /* повтор — только через руководителя */
+    if (typeof MX !== "undefined") MX.data = null;
     exResult(r);
   } catch (e) {
     $("#exst").innerHTML = "Не удалось отправить: " + esc(e.message) + ". Ответы сохранены — нажмите «Отправить ещё раз».";

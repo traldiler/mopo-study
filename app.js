@@ -55,7 +55,7 @@ async function apiRaw(action, data) {
   /* сервер Google иногда отвечает сбоем вместо данных — чтение повторяем сами, запись не дублируем */
   const safe = /^(boot|program|progress\.get|me|my\.questions|mat\.key|quiz\.overrides|exam\.extra|quiz\.review|doc\.get|doc\.sheet|my\.exams|my\.report|retake\.start|admin\.(retakes|retakeGet|users|students|attempts|attempt|questions|badges|materials|resets|examList|examGet|quizGet))$/.test(action);
   let j = null;
-  for (let tryN = 0; tryN < (safe ? 3 : 1); tryN++) {
+  for (let tryN = 0; tryN < 3; tryN++) {
     try {
       const r = await fetch(window.API_URL, {
         method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
@@ -71,7 +71,9 @@ async function apiRaw(action, data) {
     } catch (e) {
       j = null;
       const bad = /^bad:/.test(e.message || "");
-      if (tryN === (safe ? 2 : 0)) throw new Error(bad ? "Сбой сервера Google (" + e.message.slice(4).trim() + "). Попробуйте ещё раз" : "Сервер не ответил — проверьте интернет и попробуйте ещё раз");
+      /* Google отдал свою страницу 404 (так бывает сразу после выкладки новой версии) — до скрипта запрос не дошёл, повтор безопасен */
+      const again = safe || (bad && /^bad:404/.test(e.message));
+      if (tryN === 2 || !again) throw new Error(bad ? "Сбой сервера Google (" + e.message.slice(4).trim() + "). Попробуйте ещё раз" : "Сервер не ответил — проверьте интернет и попробуйте ещё раз");
       await new Promise(res => setTimeout(res, 800 * (tryN + 1)));
     }
   }
@@ -175,15 +177,19 @@ function save(action, d) {
 async function outFlush() {
   if (OUT.busy || !OUT.q.length || APP.demo || !APP.token) return;
   OUT.busy = true; saveBadge();
-  const batch = OUT.q.slice(0, 30);
+  const batch = OUT.q.slice(0, 30), owner = APP.user && APP.user.id;
   try {
     const r = await api("batch", { items: batch });
+    /* пока шла отправка, человек вышел и вошёл другой — очередь прежнего не трогаем и в память нового не пишем */
+    if (!APP.user || APP.user.id !== owner) { OUT.busy = false; return; }
     const done = new Set((r.results || []).map(x => x.qid));      /* отказ сервера повторять бессмысленно — тоже убираем */
     const before = OUT.q.length;
     OUT.q = OUT.q.filter(x => !done.has(x.qid));
     OUT.fail = OUT.q.length < before ? 0 : OUT.fail + 1;           /* ничего не подтвердилось — не повторяем каждые 50 мс */
   } catch (e) { OUT.fail++; }
-  OUT.busy = false; outKeep();
+  OUT.busy = false;
+  if (!APP.user || APP.user.id !== owner) return;
+  outKeep();
   if (OUT.q.length) { clearTimeout(OUT.timer); OUT.timer = setTimeout(outFlush, OUT.fail ? Math.min(30000, 3000 * OUT.fail) : 50); }
 }
 function saveBadge() {
@@ -194,7 +200,10 @@ function saveBadge() {
   b.textContent = OUT.fail ? "Нет связи — сохраним, как только появится" : "Сохраняется…";
 }
 /* спрашиваем при закрытии, только если связь пропала и изменения правда не ушли. Текст окна браузер не даёт менять */
-window.addEventListener("beforeunload", e => { if (OUT.q.length && OUT.fail && !APP.demo) { e.preventDefault(); e.returnValue = ""; } });
+window.addEventListener("beforeunload", e => {
+  const экзамен = typeof EX !== "undefined" && EX.running;          /* закрыть вкладку посреди экзамена — браузер переспросит; ответы при этом сохранены */
+  if (экзамен || (OUT.q.length && OUT.fail && !APP.demo)) { e.preventDefault(); e.returnValue = ""; }
+});
 window.addEventListener("pagehide", () => {
   if (!OUT.q.length || APP.demo || !navigator.sendBeacon) return;
   try { navigator.sendBeacon(window.API_URL, new Blob([JSON.stringify({ action: "batch", token: APP.token, items: OUT.q.slice(0, 30) })], { type: "text/plain;charset=utf-8" })); }
@@ -360,11 +369,14 @@ function forgotPassword(login0) {
   step1(); document.body.appendChild(back); lockScroll(true);
 }
 async function logout(silent) {
-  if ($("#me")) $("#me").hidden = true;
   if (!silent && !await ask({ title: "Выйти из кабинета", ok: "Выйти", text: "Прогресс сохранён — войдёте снова и продолжите." })) return;
+  if ($("#me")) $("#me").hidden = true;
   const token = APP.token;
   APP.token = "";                                                  /* гасим токен до запроса: иначе ответ «сессия истекла» позовёт выход ещё раз */
-  try { if (token && !APP.demo) await apiRaw("logout", { token: token }); } catch (_) { }
+  /* сервер закрывает сессию в фоне: Google отвечает до 15 секунд, ждать его незачем — раньше из-за этого выход «не срабатывал» с первого раза */
+  if (token && !APP.demo) fetch(window.API_URL, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify({ action: "logout", token: token }), keepalive: true }).catch(() => { });
+  clearTimeout(OUT.timer); OUT.q = []; OUT.fail = 0;              /* очередь осталась в памяти браузера под своим именем — дошлётся при следующем входе этого человека */
   APP.token = ""; APP.user = null; localStorage.removeItem("mopo-token");
   snapDrop(); PR.program = null; PR.progress = null; MAT_HEX = ""; MAT_KEY = null;
   MYQ.data = null; MYQ.at = 0; PR.qOver = null; PR.examX = null; MX.data = null;   /* чужие вопросы и тесты не должны достаться следующему */
@@ -377,9 +389,15 @@ async function logout(silent) {
 /* ---------- роли и режимы ---------- */
 const isStaff = u => !!u && (u.role === "admin" || u.role === "dev");
 const modeKey = () => "mopo-mode-" + (APP.user ? APP.user.id : "");
-function staffMode() { try { return localStorage.getItem(modeKey()) === "mopo" ? "mopo" : "admin"; } catch (e) { return "admin"; } }
+function staffMode() {
+  try { const m = localStorage.getItem(modeKey()); return m === "mopo" ? "mopo" : (m === "rop" && APP.user && APP.user.role === "dev") ? "rop" : "admin"; }
+  catch (e) { return "admin"; }
+}
+/* разработчик в режиме «Кабинет РОПа» видит всё ровно так, как РОП: без своих вкладок и прав */
+const devUI = () => !!APP.user && APP.user.role === "dev" && staffMode() !== "rop";
 function setMode(m) {
   try { localStorage.setItem(modeKey(), m); } catch (e) { /* не страшно */ }
+  if (m === "rop" && (ADM.tab === "devq")) ADM.tab = "students";
   go(m === "mopo" ? "cabinet" : "adm:" + (ADM.tab || "students"));
 }
 
@@ -413,7 +431,7 @@ function renderNav() {
   const n = $("#nav"); n.hidden = false; n.innerHTML = "";
   document.body.classList.remove("is-login");
   const examNow = typeof EX !== "undefined" && !!EX.running;   /* экзамен идёт — предупредим при уходе */
-  const staff = isStaff(APP.user), dev = APP.user.role === "dev", mopo = !staff || staffMode() === "mopo";
+  const staff = isStaff(APP.user), realDev = APP.user.role === "dev", dev = devUI(), mode = staffMode(), mopo = !staff || mode === "mopo";
   const items = mopo
     ? [["cabinet", "Обучение"], ["notes", "Мои записи"], ["questions", "Мои вопросы"], ["exam", "Экзамен"]]
     : [["adm:students", "Ученики"], ["adm:attempts", "Экзамены"], ["adm:questions", dev ? "Вопросы МОПОв" : "Вопросы"]]
@@ -432,10 +450,15 @@ function renderNav() {
     n.appendChild(b);
   });
   if (staff) {
-    const sw = el("button", "switch", mopo ? (dev ? "Кабинет разработчика" : "Кабинет РОПа") : "Кабинет МОПО"); sw.type = "button";
-    sw.title = mopo ? "Вернуться в свой кабинет" : "Посмотреть кабинет глазами МОПО — все уроки открыты";
-    sw.onclick = () => examNow ? leaveExam("mode:" + (mopo ? "admin" : "mopo")) : setMode(mopo ? "admin" : "mopo");
-    n.appendChild(sw);
+    /* разработчик переключается между тремя кабинетами: своим, РОПа и МОПО; РОП — между своим и МОПО */
+    const modes = realDev ? [["admin", "Кабинет разработчика"], ["rop", "Кабинет РОПа"], ["mopo", "Кабинет МОПО"]]
+                          : [["admin", "Кабинет РОПа"], ["mopo", "Кабинет МОПО"]];
+    modes.filter(([m]) => m !== mode).forEach(([m, t]) => {
+      const sw = el("button", "switch", t); sw.type = "button";
+      sw.title = m === "mopo" ? "Посмотреть кабинет глазами МОПО — все уроки открыты" : m === "rop" ? "Посмотреть кабинет глазами РОПа" : "Вернуться в свой кабинет";
+      sw.onclick = () => examNow ? leaveExam("mode:" + m) : setMode(m);
+      n.appendChild(sw);
+    });
   }
   const out = el("button", "out", "Выйти"); out.type = "button";
   out.onclick = () => examNow ? leaveExam("logout") : logout();
@@ -444,7 +467,7 @@ function renderNav() {
   if (cur && n.scrollWidth > n.clientWidth) n.scrollLeft = Math.max(0, cur.getBoundingClientRect().left - n.getBoundingClientRect().left + n.scrollLeft - 12);
   const brand = document.querySelector(".top .brand");
   if (brand) brand.textContent = !staff ? "обучение"                     /* «Пром-Импорт» — логотип рядом */
-    : mopo ? "кабинет МОПО глазами " + (dev ? "разработчика" : "РОПа") : (dev ? "кабинет разработчика" : "кабинет РОПа");
+    : mopo ? "кабинет МОПО глазами " + (realDev ? "разработчика" : "РОПа") : mode === "rop" ? "кабинет РОПа глазами разработчика" : (dev ? "кабинет разработчика" : "кабинет РОПа");
   const me = $("#me"); me.hidden = false;
   me.className = "me" + (examNow ? " exam-now" : "") + (APP.screen === "profile" ? " on" : "");
   me.innerHTML = examNow ? '<span class="dot"></span>Идёт экзамен'
@@ -455,7 +478,7 @@ function renderNav() {
 }
 function go(screen) {
   APP.screen = screen;
-  if (isStaff(APP.user) && /^adm:/.test(screen)) { try { localStorage.setItem(modeKey(), "admin"); } catch (e) { /* — */ } }
+  if (isStaff(APP.user) && /^adm:/.test(screen) && staffMode() === "mopo") { try { localStorage.setItem(modeKey(), "admin"); } catch (e) { /* — */ } }
   if (isStaff(APP.user) && /^(cabinet|notes|exam)$/.test(screen)) { try { localStorage.setItem(modeKey(), "mopo"); } catch (e) { /* — */ } }
   renderNav();
   if (screen === "cabinet") screenCabinet();
@@ -909,6 +932,10 @@ function pdfPage() {
   .textLayer{position:absolute;inset:0;overflow:hidden;line-height:1;opacity:1}
   .textLayer span,.textLayer br{color:transparent;position:absolute;white-space:pre;cursor:text;transform-origin:0 0}
   .textLayer ::selection{background:rgba(230,96,35,.35)}
+  .textLayer br::selection{background:transparent}
+  .textLayer .endOfContent{display:block;position:absolute;left:0;top:100%;right:0;bottom:0;z-index:-1;cursor:default;user-select:none;-webkit-user-select:none}
+  .textLayer.selecting .endOfContent{top:0}
+  #htmlbox{position:relative}
   .nav{position:absolute;top:0;bottom:46px;width:18%;z-index:3;cursor:pointer;display:flex;align-items:center;color:rgba(255,255,255,0);font-size:34px;transition:color .15s}
   .nav:hover{color:rgba(255,255,255,.75)} .nav.l{left:0;justify-content:flex-start;padding-left:14px} .nav.r{right:0;justify-content:flex-end;padding-right:14px}
   #bar{position:absolute;left:0;right:0;bottom:0;height:46px;display:flex;align-items:center;justify-content:center;gap:14px;color:#fff}
@@ -1019,6 +1046,7 @@ function pdfScroll(toc, tabs, note) {
       if(t){ z=Math.min(1,Math.max(.35,(sc.clientWidth-40)/t.scrollWidth)); }   /* сразу по ширине окна */
       zoomHtml();
     }
+    var zoomHtml0=zoomHtml; zoomHtml=function(){ zoomHtml0(); setTimeout(paintHtml,30); };
     function zoomHtml(){
       htmlbox.style.transform="scale("+z+")";
       htmlbox.style.width=(100/z)+"%";
@@ -1049,6 +1077,9 @@ function pdfScroll(toc, tabs, note) {
       box.innerHTML=""; box.appendChild(c);
       var tl=document.createElement("div"); tl.className="textLayer"; tl.style.setProperty("--scale-factor",s); box.appendChild(tl);
       try{ await pdfjsLib.renderTextLayer({textContentSource:await x.p.getTextContent(),container:tl,viewport:vp}).promise; }catch(e){}
+      /* без этого, когда мышь проходит между строками, браузер выделяет всё до конца страницы */
+      var eoc=document.createElement("div"); eoc.className="endOfContent"; tl.appendChild(eoc); EOC.set(tl,eoc);
+      tl.addEventListener("mousedown",function(){ tl.classList.add("selecting"); lastGood=null; dragging=true; });
       try{ (await x.p.getAnnotations()).forEach(function(a){
         if(a.subtype!=="Link"||(!a.url&&!a.dest)) return;
         var r=vp.convertToViewportRectangle(a.rect), d=document.createElement("div"); d.className="lk";
@@ -1098,7 +1129,7 @@ function pdfScroll(toc, tabs, note) {
     sc.addEventListener("touchmove",function(e){ if(e.touches.length===2&&d0){ e.preventDefault(); setZ(z0*dist(e.touches)/d0); } },{passive:false});
     var rt; window.addEventListener("resize",function(){ clearTimeout(rt); rt=setTimeout(function(){ fit=fitScale(); layout(); },200); });
     /* выделение мышью: «Заметка» отправляет цитату в панель кабинета, кружок — цветной маркер поверх PDF */
-    var COLORS=${COLJ}, MARKS=[], bar=document.getElementById("selbar");
+    var COLORS=${COLJ}, MARKS=[], EOC=new Map(), lastGood=null, dragging=false, bar=document.getElementById("selbar");
     bar.innerHTML='<button type="button" data-q="1">Заметка</button>' +
       COLORS.map(function(c,i){ return c?'<button type="button" class="dot" data-c="'+i+'" style="background:'+c+'" title="Маркер"></button>':""; }).join("");
     function selText(){ var s=window.getSelection(); return s&&!s.isCollapsed?String(s).replace(/\\s+/g," ").trim():""; }
@@ -1117,7 +1148,31 @@ function pdfScroll(toc, tabs, note) {
       }
       bar.classList.add("on");
     }
-    document.addEventListener("mouseup",function(){ setTimeout(function(){ showBar(false); },10); });
+    document.addEventListener("mouseup",function(){
+      [].slice.call(document.querySelectorAll(".textLayer.selecting")).forEach(function(n){ n.classList.remove("selecting"); });
+      EOC.forEach(function(e,t){ e.style.width=""; e.style.height=""; if(e.parentNode!==t||t.lastChild!==e) t.appendChild(e); });
+      /* довели мышь до пустого места под текстом — браузер сбрасывает выделение; возвращаем то, что было */
+      var s0=document.getSelection();
+      if(dragging&&lastGood&&s0&&(s0.isCollapsed||!String(s0).trim())){ try{ s0.removeAllRanges(); s0.addRange(lastGood); }catch(e){} }
+      dragging=false;
+      setTimeout(function(){ showBar(false); },10);
+    });
+    /* как в PDF.js 4: «конец текста» ставим сразу за словом под курсором — пустоты между строками больше не тянут выделение до конца страницы */
+    var prevRange=null;
+    document.addEventListener("selectionchange",function(){
+      var sel=document.getSelection(); if(!sel||!sel.rangeCount){ prevRange=null; return; }
+      var range=sel.getRangeAt(0);
+      var modifyStart=prevRange&&(range.compareBoundaryPoints(Range.END_TO_END,prevRange)===0||range.compareBoundaryPoints(Range.START_TO_END,prevRange)===0);
+      var anchor=modifyStart?range.startContainer:range.endContainer;
+      if(anchor&&anchor.nodeType===3) anchor=anchor.parentNode;
+      var tl=anchor&&anchor.parentElement&&anchor.parentElement.closest(".textLayer"), end=tl&&EOC.get(tl);
+      if(end&&anchor!==end&&anchor.parentElement){
+        end.style.width=tl.style.width; end.style.height=tl.style.height;
+        anchor.parentElement.insertBefore(end,modifyStart?anchor:anchor.nextSibling);
+      }
+      prevRange=range.cloneRange();
+      if(dragging&&!range.collapsed&&String(sel).trim()) lastGood=range.cloneRange();
+    });
     var тач=false, тачТаймер=null;
     document.addEventListener("touchstart",function(){ тач=true; },{passive:true});
     document.addEventListener("selectionchange",function(){        /* палец: мышиных событий нет */
@@ -1134,49 +1189,71 @@ function pdfScroll(toc, tabs, note) {
       hideBar(); try{ window.getSelection().removeAllRanges(); }catch(e2){}
     });
     /* подсветка сохранённых выделений: ищем фразу в тексте страницы и кладём цветные прямоугольники под текст */
-    function nz(t){ return String(t||"").toLowerCase().replace(/ё/g,"е").replace(/\\s+/g," "); }
-    function paintMarks(x){
-      if(!x.box) return;
-      [].slice.call(x.box.querySelectorAll(".mk")).forEach(function(n){ n.remove(); });
-      var tl=x.box.querySelector(".textLayer"); if(!tl||!MARKS.length) return;
-      var map=[], S="";
-      [].slice.call(tl.childNodes).forEach(function(node){
-        var tx=node.textContent||"";
-        for(var i=0;i<tx.length;i++){ S+=tx[i]; map.push({n:node.firstChild||node,o:i}); }
-        S+=" "; map.push(null);
-      });
-      var Sn=nz(S), bx=x.box.getBoundingClientRect();
+    /* фразу ищем без учёта пробелов и регистра: PDF режет строку на куски, и пробелы между ними в выделении и в тексте расходятся */
+    function nz(t){ return String(t||"").toLowerCase().replace(/ё/g,"е").replace(/\\s+/g,""); }
+    function textMap(root){
+      var map=[], S="", w=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,null), n;
+      while((n=w.nextNode())){
+        if(n.parentNode&&n.parentNode.classList&&n.parentNode.classList.contains("endOfContent")) continue;
+        var tx=n.nodeValue||"";
+        for(var i=0;i<tx.length;i++){ var ch=tx[i]; if(/\\s/.test(ch)) continue; S+=ch.toLowerCase().replace("ё","е"); map.push({n:n,o:i}); }
+      }
+      return {S:S,map:map};
+    }
+    /* прямоугольники маркера кладём под текст; sc — масштаб контейнера (у собранного листа он через transform) */
+    function paintIn(root,host,k){
+      [].slice.call(host.querySelectorAll(".mk")).forEach(function(n){ n.remove(); });
+      if(!root||!MARKS.length) return;
+      var T=textMap(root), hb=host.getBoundingClientRect(), found=[];
       MARKS.forEach(function(m){
         var q=nz(m.text); if(q.length<3) return;
-        var at=Sn.indexOf(q);
+        var at=T.S.indexOf(q);
         while(at>=0){
-          var a=map[at], b=map[at+q.length-1];
-          if(a&&b){
-            try{
-              var rg=document.createRange(); rg.setStart(a.n,a.o); rg.setEnd(b.n,b.o+1);
-              [].slice.call(rg.getClientRects()).forEach(function(r){
-                var d=document.createElement("div"); d.className="mk";
-                d.style.background=COLORS[m.color||1]||COLORS[1];
-                d.style.left=(r.left-bx.left)+"px"; d.style.top=(r.top-bx.top)+"px";
-                d.style.width=r.width+"px"; d.style.height=r.height+"px"; x.box.appendChild(d);
-              });
-            }catch(e){}
-          }
-          at=Sn.indexOf(q,at+q.length);
+          var a=T.map[at], b=T.map[at+q.length-1];
+          try{
+            var rg=document.createRange(); rg.setStart(a.n,a.o); rg.setEnd(b.n,b.o+1);
+            [].slice.call(rg.getClientRects()).forEach(function(r){
+              if(r.width<1||r.height<1) return;
+              var d=document.createElement("div"); d.className="mk"; d.dataset.q=q;
+              d.style.background=COLORS[m.color||1]||COLORS[1];
+              d.style.left=(r.left-hb.left)/k+"px"; d.style.top=(r.top-hb.top)/k+"px";
+              d.style.width=r.width/k+"px"; d.style.height=r.height/k+"px"; host.appendChild(d); found.push(d);
+            });
+          }catch(e){}
+          at=T.S.indexOf(q,at+q.length);
         }
       });
+      return found;
     }
-    function paintAll(){ pages.forEach(function(x){ if(x.box&&x.box.querySelector(".textLayer")) paintMarks(x); }); }
+    function paintMarks(x){ if(x&&x.box) paintIn(x.box.querySelector(".textLayer"),x.box,1); }
+    function paintHtml(){ if(htmlbox.style.display==="block") paintIn(htmlbox,htmlbox,z); }
+    function paintAll(){ pages.forEach(function(x){ if(x.box&&x.box.querySelector(".textLayer")) paintMarks(x); }); paintHtml(); }
+    function scrollToMk(host,q){
+      var d=[].slice.call(host.querySelectorAll(".mk")).filter(function(n){ return n.dataset.q===q; })[0];
+      if(!d) return false;
+      var r=d.getBoundingClientRect(), sr=sc.getBoundingClientRect();
+      sc.scrollTop+=r.top-sr.top-sc.clientHeight/3;
+      d.animate&&d.animate([{opacity:.9},{opacity:.3},{opacity:.9}],{duration:900,iterations:2});
+      return true;
+    }
     window.addEventListener("message",function(e){
       var d=e.data||{};
       if(d.mopo==="reset"){ MARKS=d.list||[]; paintAll(); }
       if(d.mopo==="focus"&&d.text){
         var q=nz(d.text);
+        if(!MARKS.some(function(m){ return nz(m.text)===q; })) MARKS=MARKS.concat([{text:d.text,color:1}]);
         (async function(){
+          if(htmlbox.style.display==="block"){ paintHtml(); if(!scrollToMk(htmlbox,q)) parent.postMessage({mopo:"notfound"},"*"); return; }
           for(var i=0;i<pages.length;i++){
-            var t=nz((await pages[i].p.getTextContent()).items.map(function(z){return z.str;}).join(" "));
-            if(t.indexOf(q)>=0){ sc.scrollTop=pages[i].box.offsetTop-10; await draw(i,gen); paintMarks(pages[i]); break; }
+            var t=nz((await pages[i].p.getTextContent()).items.map(function(z){return z.str;}).join(""));
+            if(t.indexOf(q)>=0){
+              sc.scrollTop=pages[i].box.offsetTop-10;
+              await draw(i,gen); paintMarks(pages[i]);
+              setTimeout(function(){ scrollToMk(pages[i].box,q); },60);
+              return;
+            }
           }
+          parent.postMessage({mopo:"notfound"},"*");
         })();
       }
     });
@@ -1329,6 +1406,8 @@ async function loadDoc(frame, l) {
   try {
     const r = await api("doc.get", { lessonId: l.id, have: cached ? cached.mt : "" });
     if (r.same) return;
+    /* таблица приходит всегда (у листа могли добавиться части) — перерисовываем, только если что-то правда поменялось */
+    if (cached && r.kind === "sheet" && cached.kind === "sheet" && r.mt === cached.mt && JSON.stringify(r.sheets) === JSON.stringify(cached.sheets)) return;
     if (r && !r.service && (r.html || r.pdf || r.sheets)) await docCachePut(l.id, r);   /* заглушку Google не запоминаем */
     if (!frame.isConnected) return;
     renderDoc(frame, r, { lessonId: l.id });
@@ -1454,7 +1533,7 @@ function openLesson(l, at, quote) {
       ${framed ? "" : '<button type="button" data-a="newtab" class="quiet">Открыть в новой вкладке ↗</button>'}
       ${узкийЭкран && (video || framed) ? '<button type="button" data-a="big">⤢ Развернуть</button>' : ""}
       <button type="button" data-a="notes" class="${узкийЭкран ? "" : "on "}first">Заметки</button>
-      ${own ? "" : `<button type="button" data-a="ask">${узкийЭкран ? "Вопрос" : (isStaff(APP.user) ? "Вопрос разработчику" : "Спросить РОПа")}</button>
+      ${own ? "" : `<button type="button" data-a="ask">${узкийЭкран ? "Вопрос" : (isStaff(APP.user) && staffMode() !== "mopo" ? "Вопрос разработчику" : "Спросить РОПа")}</button>
       <button type="button" data-a="bm" class="bm"></button>`}
       <button type="button" data-a="close">Закрыть</button></div>
     <div class="vbody">
@@ -1616,6 +1695,7 @@ function openLesson(l, at, quote) {
       if (quote) setTimeout(() => post({ mopo: "focus", text: quote }), 250);
     }
     if (d.mopo === "opendoc") { openDocUrl(d.url); return; }
+    if (d.mopo === "notfound") { toast("Это место в документе не нашлось — возможно, документ обновили"); return; }
     if (d.mopo === "openlesson" && own) { openLessonById(d.id); return; }    /* «где посмотреть» в разборе — урок поверх разбора */
     if (d.mopo === "quote") {
       if (v.classList.contains("nonotes")) {           /* панель была спрятана — показываем, иначе заметка «пропадёт» */
@@ -1817,7 +1897,7 @@ function filterDrop(g, state, onChange) {
 
 const QUI = { filter: "all" };
 async function screenQuestions() {
-  const staff = isStaff(APP.user);
+  const staff = isStaff(APP.user) && staffMode() !== "mopo";           /* в режиме «Кабинет МОПО» — ровно экран МОПО */
   $("#htitle").textContent = staff ? "Разработчику" : "Мои вопросы";
   $("#timer").hidden = true;
   $("#app").innerHTML = `<div class="card"><p class="lead">Загружаем…</p></div>`;
@@ -2236,8 +2316,9 @@ function screenProfile(editing) {
 function askRop(l) {
   const back = el("div", "modal-back");
   back.innerHTML = `<div class="modal wide" role="dialog" aria-modal="true">
-    <b>${isStaff(APP.user) ? "Вопрос разработчику" : "Спросить РОПа"}</b>
-    <p class="hint">${isStaff(APP.user) ? "Вопрос увидит разработчик в своём кабинете, ответ придёт в раздел «Разработчику»."
+    <b>${isStaff(APP.user) && staffMode() !== "mopo" ? "Вопрос разработчику" : "Спросить РОПа"}</b>
+    <p class="hint">${isStaff(APP.user) ? (staffMode() === "mopo" ? "Так это окно видит МОПО. Вы смотрите кабинет глазами МОПО, поэтому ваш вопрос уйдёт разработчику, а ответ появится в «Моих вопросах»."
+      : "Вопрос увидит разработчик в своём кабинете, ответ придёт в раздел «Разработчику».")
       : "Вопрос сохранится в кабинете и будет виден РОПу вместе с уроком. После отправки можно продублировать его в рабочую группу WhatsApp — текст будет готов."}</p>
     <label class="f">Урок</label><input type="text" value="${esc(l.title)}" disabled>
     <label class="f">Вопрос</label><textarea id="qtext" placeholder="Что именно непонятно"></textarea>
@@ -2304,14 +2385,13 @@ function waNotice({ to, group, title, text }) {
 }
 
 async function leaveExam(where) {
-  if (!exAll().some(exAnswered)) {   /* ни одного ответа — отправлять нечего, просто выходим */
-    EX.running = false; clearInterval(window.__exti); $("#timer").hidden = true;
-    try { localStorage.removeItem(LSKEY()); } catch (_) { }
-    if (where === "logout") return logout(true);
-    renderNav(); return where.startsWith("mode:") ? setMode(where.slice(5)) : go(where);
-  }
-  const ok = await ask({ title: "Идёт экзамен", danger: true, ok: "Прекратить и выйти", cancel: "Остаться в экзамене",
-    text: "Если уйти со страницы экзамена, он прекратится: ответы отправятся как есть, и вернуться к ним будет нельзя.<br>Повторная попытка — только с разрешения руководителя." });
+  /* во время экзамена другие разделы кабинета закрыты: уйти можно, только прекратив экзамен */
+  const retake = EX.mode === "retake", что = retake ? "пересдача" : "экзамен", Что = retake ? "Пересдача" : "Экзамен";
+  const n = exAll().filter(exAnswered).length;
+  const ok = await ask({ title: "Идёт " + что, danger: true, ok: "Прекратить " + (retake ? "пересдачу" : "экзамен"), cancel: "Остаться",
+    text: `Пока идёт ${что}, другие разделы кабинета закрыты. Если уйти, ${что} прекратится: ` +
+      (n ? `ответы (${n}) отправятся как есть, и вернуться к ним будет нельзя.` : `вы не ответили ни на один вопрос — попытка засчитается с нулём баллов.`) +
+      `<br>${retake ? "Новую пересдачу" : "Повторную попытку"} открывает только руководитель.` });
   if (!ok) return;
   try { await exFinish(true); } catch (_) { }
   if (where === "logout") logout(true); else if (where.startsWith("mode:")) setMode(where.slice(5)); else go(where);
@@ -2348,6 +2428,16 @@ async function examMain(mx) {
   if (allowed && (!notReady.length || force)) {
     if (force && notReady.length) toast("Руководитель открыл экзамен досрочно: часть блоков ещё не закрыта.");
     await screenExamIntro();
+    return examHistory(mx);
+  }
+  if (mx && (mx.attempts || []).some(a => a.kind !== "retake")) {        /* экзамен уже сдавали — повтор только через руководителя */
+    const last = (mx.attempts || [])[0] || {}, сдал = last.verdict === "сдал";
+    $("#app").innerHTML = `<div class="card"><h2>${сдал ? (last.kind === "retake" ? "Пересдача сдана" : "Экзамен сдан") : "Экзамен отправлен"}</h2>
+      <p class="lead">${сдал ? "Результат — " + esc(last.percent) + "%. Руководитель посмотрит ответы и откроет следующий этап."
+        : "Ваши ответы у руководителя. Повторную попытку или индивидуальную пересдачу открывает он — когда это случится, кнопка появится здесь."}
+        Разбор ошибок появится ниже, в «Моих попытках», когда руководитель его отправит.</p>
+      <div class="foot"><button class="btn ghost" id="gback" type="button">К обучению</button></div></div>`;
+    $("#gback").onclick = () => go("cabinet");
     return examHistory(mx);
   }
   $("#app").innerHTML = `<div class="card"><h2>Экзамен пока закрыт</h2>
@@ -2454,7 +2544,7 @@ async function start() {
     if (!MYQ.data) setTimeout(() => {                                /* ответы на свои вопросы — чтобы значок загорелся сразу */
       api("my.questions").then(x => { MYQ.data = x; MYQ.at = Date.now(); renderNav(); }).catch(() => { });
     }, 1200);
-    if (!(await locRestore().catch(() => false))) go(isStaff(APP.user) && staffMode() === "admin" ? "adm:students" : "cabinet");
+    if (!(await locRestore().catch(() => false))) go(isStaff(APP.user) && staffMode() !== "mopo" ? "adm:students" : "cabinet");
     locSave();
   } catch (e) { screenLogin(); }
 }
@@ -3026,6 +3116,7 @@ async function demoCall(action, d) {
     }
     case "exam.submit": {
       const r = demoGrade(d.data);
+      Object.assign(demoState(), { examAllowed: false, examForce: false });   /* как на сервере: после отправки экзамен закрыт */
       DEMO.attempts.unshift(Object.assign({ id: "att-demo-" + Date.now(), userId: demoMe().id, fio: demoMe().fio,
         login: demoMe().login, finishedAt: new Date().toISOString(), durationSec: d.data.durationSec,
         overtimeSec: d.data.overtimeSec, away: d.data.away }, r));
@@ -3163,7 +3254,6 @@ async function demoCall(action, d) {
       demoKeep(); return JSON.parse(JSON.stringify(a));
     }
     case "admin.users": return { users: Object.keys(DEMO.users).map(k => Object.assign({ active: true, archived: false }, DEMO.users[k]))
-      .filter(u => demoMe().role === "dev" || u.role === "employee")
       .map(u => { const c = Object.assign({}, u, { locked: !!u.lockedAt }); delete c.demoPass; return c; }) };
     case "admin.userStatus": {
       const u = Object.values(DEMO.users).filter(x => x.id === d.id)[0];
