@@ -2076,11 +2076,23 @@ async function screenNotes(keep) {
   const index = {};
   PR.program.blocks.forEach(b => b.subs.forEach(s => s.lessons.forEach(l => index[l.id] = { block: b, sub: s, lesson: l })));
   const byLesson = PR.progress.notes || {};
+  /* разбор экзамена — не урок программы: его заметки и выделения собираем в группу «Экзамен» */
+  const REP_N = 99, repBlock = { n: REP_N, title: "Экзамен и пересдачи" };
+  const repTitle = id => {
+    const a = ((MX.data && MX.user === APP.user.id && MX.data.attempts) || []).filter(x => "rep:" + x.id === id)[0];
+    return (a && a.kind === "retake" ? "Разбор пересдачи" : "Разбор экзамена") + (a && a.finishedAt ? " · " + new Date(a.finishedAt).toLocaleDateString("ru-RU") : "");
+  };
+  Object.keys(byLesson).filter(id => /^rep:/.test(id) && (byLesson[id] || []).length).forEach(id => {
+    index[id] = { block: repBlock, sub: { title: "" }, lesson: { id: id, title: repTitle(id), kind: "разбор" }, rep: id.slice(4) };
+  });
+  if (Object.keys(index).some(id => /^rep:/.test(id)) && !(MX.data && MX.user === APP.user.id))
+    myExams().then(x => { if (x && APP.screen === "notes") screenNotes(true); });   /* даты попыток подтянем и перерисуем */
   const items = Object.keys(byLesson).flatMap(id => (byLesson[id] || []).map(n => ({ id: id, n: n, ref: index[id] })))
     .filter(x => x.ref).sort((a, b) => String(b.n.at).localeCompare(String(a.n.at)));
+  const hasRep = items.some(x => x.ref.rep);
   const kindOf = n => n.kind === "hl" || n.kind === "bm" ? n.kind : "note";
   const cnt = k => items.filter(x => kindOf(x.n) === k).length;
-  const kinds = [...new Set(PR.program.blocks.flatMap(b => b.subs.flatMap(s => s.lessons.map(l => l.kind))))].sort();
+  const kinds = [...new Set(PR.program.blocks.flatMap(b => b.subs.flatMap(s => s.lessons.map(l => l.kind))).concat(hasRep ? ["разбор"] : []))].sort();
   $("#app").innerHTML = `<div class="card">
       <div class="qhead"><div><h2>Мои записи</h2>
         <p class="lead">Заметки, выделения и закладки по всем материалам. Из любой можно перейти прямо на её место.</p></div></div>
@@ -2092,7 +2104,8 @@ async function screenNotes(keep) {
         <div class="fdrops" id="fdrops"></div></div>
     </div><div id="nlist" style="margin-top:12px"></div>`;
   const G = {
-    blocks: { key: "blocks", title: "Блоки", num: true, items: PR.program.blocks.map(b => ({ v: b.n, t: blockNum(b.n) + ". " + b.title })) },
+    blocks: { key: "blocks", title: "Блоки", num: true, items: PR.program.blocks.map(b => ({ v: b.n, t: blockNum(b.n) + ". " + b.title }))
+      .concat([{ v: REP_N, t: "Экзамен и пересдачи" }]) },          /* записи из разборов — всегда последним пунктом после блоков */
     kinds:  { key: "kinds", title: "Формат", items: kinds.map(k => ({ v: k, t: k })) },
     colors: { key: "colors", title: "Цвет маркера", num: true, swatch: true, items: MARKERS.slice(1).map((m, i) => ({ v: i + 1, t: m.n, color: m.c })) } };
   const drops = () => {
@@ -2111,8 +2124,9 @@ async function screenNotes(keep) {
       (NUI.mode !== "hl" || !NUI.colors.size || NUI.colors.has(x.n.color || 1)))
       .map(x => Object.assign(x, { score: smartMatch(NUI.q,
         x.n.kind === "bm" ? x.ref.lesson.title : [x.n.text, x.n.quote].join(" "),
-        [x.ref.lesson.title, x.ref.lesson.kind, x.ref.sub.title, "блок " + blockNum(x.ref.block.n), x.ref.block.title].join(" "),
-        x.ref.block.n) }));
+        x.ref.rep ? [x.ref.lesson.title, "разбор экзамен пересдача ошибки"].join(" ")
+          : [x.ref.lesson.title, x.ref.lesson.kind, x.ref.sub.title, "блок " + blockNum(x.ref.block.n), x.ref.block.title].join(" "),
+        x.ref.rep ? null : x.ref.block.n) }));
     const best = Math.max(0, ...pool.map(x => x.score));
     const f = pool.filter(x => x.score && x.score === best);
     if (!f.length) {
@@ -2134,19 +2148,20 @@ async function screenNotes(keep) {
       const k = kindOf(x.n);
       const c = el("div", "card note-card" + (k === "hl" ? " hl-card" : k === "bm" ? " bm-card" : ""));
       if (k === "hl") c.style.setProperty("--mk", (MARKERS[x.n.color] || MARKERS[1]).c);
-      c.innerHTML = `<div class="nc-head"><span class="tag">Блок ${blockNum(x.ref.block.n)}</span>
+      c.innerHTML = `<div class="nc-head"><span class="tag">${x.ref.rep ? "Экзамен" : "Блок " + blockNum(x.ref.block.n)}</span>
           <span class="tag">${esc(x.ref.lesson.kind)}</span><b>${k === "bm" ? "★ " : ""}${esc(x.ref.lesson.title)}</b>
           <span class="hint">${esc(dayRu(x.n.at))}</span>
           ${x.n.time ? `<span class="tc">▶ ${esc(x.n.time)}</span>` : ""}
-          <button class="link inblock" type="button" data-in="1">показать в блоке</button></div>
+          <button class="link inblock" type="button" data-in="1">${x.ref.rep ? "к попыткам" : "показать в блоке"}</button></div>
         ${k === "hl" ? `<p class="hlq">${esc(x.n.quote)}</p><div class="mkrow">${dots(x.n.color || 1, "data-c")}</div>`
           : k === "bm" ? `<p class="hint">${esc(x.ref.sub.title || x.ref.block.title)}</p>`
           : `${x.n.quote ? `<div class="nquote">«${esc(x.n.quote)}»</div>` : ""}<p>${esc(x.n.text)}</p>`}
         <div class="ni-foot">
           <button class="btn small white" type="button" data-go="1">${x.n.quote ? "Перейти к месту" : x.ref.lesson.kind === "видео" ? "Смотреть материал" : "Открыть материал"}</button>
           <button class="btn small red" type="button" data-del="1">${k === "bm" ? "Убрать из закладок" : "Удалить"}</button></div>`;
-      c.querySelector("[data-in]").onclick = () => { APP.screen = "cabinet"; renderNav(); openBlock(x.ref.block.n, x.ref.lesson.id); };
-      c.querySelector("[data-go]").onclick = () => openLesson(x.ref.lesson, x.n.time || null, x.n.quote || null);
+      c.querySelector("[data-in]").onclick = () => { if (x.ref.rep) { go("exam"); return; } APP.screen = "cabinet"; renderNav(); openBlock(x.ref.block.n, x.ref.lesson.id); };
+      c.querySelector("[data-go]").onclick = x.ref.rep ? once(() => openReport(x.ref.rep, x.n.quote || null))
+        : () => openLesson(x.ref.lesson, x.n.time || null, x.n.quote || null);
       c.querySelector("[data-del]").onclick = async () => {
         save("note.del", { lessonId: x.id, id: x.n.id }); screenNotes(true);
       };
@@ -2545,7 +2560,7 @@ function examHistory(mx) {
   $("#app").appendChild(c);
 }
 /* разбор в кабинете: только просмотр, заметки и выделения — без скачивания */
-async function openReport(id) {
+async function openReport(id, quote) {
   let r;
   try { r = await api("my.report", { id: id }); if (!PR.program) PR.program = await api("program"); } catch (e) { return fail(e); }
   r.fio = r.fio || (APP.user && APP.user.fio) || "";
@@ -2557,7 +2572,7 @@ async function openReport(id) {
     <style>body{margin:0;background:#fff}.rpaper{max-width:820px;margin:0 auto;padding:22px 18px 60px}${p.css}</style></head>
     <body><div class="rpaper">${p.head}${p.body}</div>${link}</body></html>`;
   openLesson({ id: "rep:" + r.id, title: (r.kind === "retake" ? "Разбор пересдачи" : "Разбор экзамена") + " · " + new Date(r.finishedAt).toLocaleDateString("ru-RU"),
-               kind: "конспект", html: html });
+               kind: "конспект", html: html }, null, quote || null);
 }
 
 /* ---------- запуск ---------- */
