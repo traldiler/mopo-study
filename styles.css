@@ -1768,3 +1768,12 @@ label.f{font-family:var(--f-text); font-size:13px; font-weight:600; letter-spaci
 .rtsum{display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:4px 0 12px;} .rtsum b{margin-right:6px;}
 .rtnew{color:var(--green); font-weight:700;}
 .qbar{margin-top:12px;} .qbar input[type=text]{flex:2 1 240px; max-width:none; padding:9px 12px;}
+
+/* плашка «вышла новая версия» */
+.updbar{position:fixed; left:50%; bottom:18px; transform:translateX(-50%); z-index:9999; display:flex; gap:14px; align-items:center;
+  background:var(--graphite); color:#fff; border-radius:12px; padding:10px 12px 10px 16px; box-shadow:0 8px 30px rgba(0,0,0,.25); font-size:14px; max-width:calc(100% - 32px);}
+.updbar button{border:0; border-radius:8px; background:var(--accent); color:#fff; font-weight:700; padding:8px 14px; cursor:pointer; font:inherit; font-weight:700;}
+.updbar button:hover{background:var(--accent-d);}
+
+/* недособранная пересдача: две кнопки рядом */
+.rtbtns{display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;}

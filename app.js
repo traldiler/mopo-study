@@ -155,7 +155,7 @@ function applyLocal(action, d) {
   if (action === "note.save") {
     const list = P.notes[d.lessonId] = P.notes[d.lessonId] || [];
     if (!list.some(n => n.id === d.id)) list.push({ id: d.id, kind: d.kind || "note", text: d.text || "", time: d.time || "",
-      quote: d.quote || "", color: Number(d.color) || 0, at: new Date().toISOString() });
+      quote: d.quote || "", color: Number(d.color) || 0, at: new Date().toISOString(), place: d.place || "" });
   }
   if (action === "note.del") P.notes[d.lessonId] = (P.notes[d.lessonId] || []).filter(n => n.id !== d.id);
   if (action === "note.update") (P.notes[d.lessonId] || []).forEach(n => {
@@ -256,6 +256,27 @@ function lockScroll(on) {
   document.body.classList.toggle("noscroll", !!on || !!document.querySelector(".viewer, .modal-back"));
 }
 let TOAST_LAST = { text: "", at: 0 };
+/* вкладка открыта давно (закреплённая, из закладок): при возврате в неё сверяем версию и предлагаем обновить */
+(function () {
+  const mine = () => { const s = document.querySelector('script[src*="app.js"]'); return s ? ((s.src.match(/[?&]v=([^&]+)/) || [])[1] || "") : ""; };
+  let last = Date.now(), shown = false;
+  const check = async () => {
+    if (shown || Date.now() - last < 3 * 60 * 1000 || !navigator.onLine || !mine()) return;
+    last = Date.now();
+    try {
+      const t = await (await fetch("index.html?u=" + Date.now(), { cache: "no-store" })).text();
+      const v = (t.match(/app\.js\?v=([^"'&]+)/) || [])[1];
+      if (!v || v === mine()) return;
+      shown = true;
+      const bar = el("div", "updbar", `<span>Вышла новая версия кабинета</span><button type="button">Обновить</button>`);
+      bar.querySelector("button").onclick = () => location.reload();
+      document.body.appendChild(bar);
+    } catch (e) { }
+  };
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) check(); });
+  window.addEventListener("focus", check);
+  setInterval(check, 20 * 60 * 1000);
+})();
 function toast(text) {
   const now = Date.now();
   if (text === TOAST_LAST.text && now - TOAST_LAST.at < 12000) return;   /* не повторяем одно и то же сообщение */
@@ -1046,6 +1067,7 @@ function pdfScroll(toc, tabs, note) {
       var t=htmlbox.querySelector("table");
       if(t){ z=Math.min(1,Math.max(.35,(sc.clientWidth-40)/t.scrollWidth)); }   /* сразу по ширине окна */
       zoomHtml();
+      if(PEND) setTimeout(runPend,120);
     }
     var zoomHtml0=zoomHtml; zoomHtml=function(){ zoomHtml0(); setTimeout(paintHtml,30); };
     function zoomHtml(){
@@ -1068,6 +1090,7 @@ function pdfScroll(toc, tabs, note) {
       fit=fitScale(); layout(); num();
       if(!TABS.length) buildToc();                    /* оглавление — для документов; у таблицы вместо него список листов */
       busyTab=false;
+      if(PEND) setTimeout(runPend,60);
     }
     function fitScale(){ var w=0; pages.forEach(function(x){ w=Math.max(w,x.v.width); }); return Math.min(1.6,(sc.clientWidth-32)/w); }
     async function draw(i,g){
@@ -1185,8 +1208,9 @@ function pdfScroll(toc, tabs, note) {
     bar.addEventListener("click",function(e){
       var b=e.target.closest("button"); if(!b) return;
       var t=selText(); if(!t) return hideBar();
-      if(b.dataset.q) parent.postMessage({mopo:"quote",text:t},"*");
-      else parent.postMessage({mopo:"hl",text:t,color:+b.dataset.c},"*");
+      var place=TABS.length?curTab+":"+curPart:"";                /* таблица: на каком листе и в какой части */
+      if(b.dataset.q) parent.postMessage({mopo:"quote",text:t,place:place},"*");
+      else parent.postMessage({mopo:"hl",text:t,color:+b.dataset.c,place:place},"*");
       hideBar(); try{ window.getSelection().removeAllRanges(); }catch(e2){}
     });
     /* подсветка сохранённых выделений: ищем фразу в тексте страницы и кладём цветные прямоугольники под текст */
@@ -1241,23 +1265,48 @@ function pdfScroll(toc, tabs, note) {
       var d=e.data||{};
       if(d.mopo==="reset"){ MARKS=d.list||[]; paintAll(); }
       if(d.mopo==="focus"&&d.text){
-        var q=nz(d.text);
-        if(!MARKS.some(function(m){ return nz(m.text)===q; })) MARKS=MARKS.concat([{text:d.text,color:1}]);
-        (async function(){
-          if(htmlbox.style.display==="block"){ paintHtml(); if(!scrollToMk(htmlbox,q)) parent.postMessage({mopo:"notfound"},"*"); return; }
-          for(var i=0;i<pages.length;i++){
-            var t=nz((await pages[i].p.getTextContent()).items.map(function(z){return z.str;}).join(""));
-            if(t.indexOf(q)>=0){
-              sc.scrollTop=pages[i].box.offsetTop-10;
-              await draw(i,gen); paintMarks(pages[i]);
-              setTimeout(function(){ scrollToMk(pages[i].box,q); },60);
-              return;
-            }
-          }
-          parent.postMessage({mopo:"notfound"},"*");
-        })();
+        PEND={text:d.text,tried:{},n:0};
+        var pl=String(d.place||"").split(":");
+        if(TABS.length&&d.place&&TABS[+pl[0]]){                  /* выделение помнит лист — сразу туда */
+          var ti=+pl[0], tp=Math.min(+pl[1]||0,((TABS[ti]||{}).parts||1)-1);
+          if(ti!==curTab||tp!==curPart){ askTab(ti,tp); return; }
+        }
+        if(hereReady()) runPend();                               /* иначе выполним, когда документ догрузится */
       }
     });
+    /* «перейти к месту» приходит и тогда, когда документ ещё грузится (открыли из «Моих записей») — помним и выполняем после загрузки */
+    var PEND=null;
+    function hereReady(){ return !busyTab&&(htmlbox.style.display==="block"||pages.length>0); }
+    async function findHere(q){
+      if(htmlbox.style.display==="block"){ paintHtml(); return scrollToMk(htmlbox,q); }
+      for(var i=0;i<pages.length;i++){
+        var t=nz((await pages[i].p.getTextContent()).items.map(function(z){return z.str;}).join(""));
+        if(t.indexOf(q)>=0){
+          sc.scrollTop=pages[i].box.offsetTop-10;
+          await draw(i,gen); paintMarks(pages[i]);
+          (function(k){ setTimeout(function(){ scrollToMk(pages[k].box,q); },60); })(i);
+          return true;
+        }
+      }
+      return false;
+    }
+    async function runPend(){
+      if(!PEND) return;
+      var P=PEND, q=nz(P.text);
+      if(!MARKS.some(function(m){ return nz(m.text)===q; })) MARKS=MARKS.concat([{text:P.text,color:1}]);
+      var ok=false; try{ ok=await findHere(q); }catch(e){}
+      if(P!==PEND) return;                                      /* пока искали, попросили другое место */
+      if(ok){ PEND=null; return; }
+      if(TABS.length){                                          /* старое выделение без отметки листа — смотрим остальные листы и части */
+        P.tried[curTab+":"+curPart]=1;
+        for(var i=0;i<TABS.length&&P.n<40;i++) for(var k=0;k<((TABS[i]||{}).parts||1);k++){
+          if(P.tried[i+":"+k]) continue;
+          if(!P.n) parent.postMessage({mopo:"searching"},"*");
+          P.n++; askTab(i,k); return;
+        }
+      }
+      PEND=null; parent.postMessage({mopo:"notfound"},"*");
+    }
     parent.postMessage({mopo:"ready"},"*");
     /* оглавление слева, как в Google Документах: заголовки ищем в тексте страниц */
     var norm=function(t){ return String(t||"").toLowerCase().replace(/ё/g,"е").replace(/[^a-zа-я0-9]+/g,""); };
@@ -1294,7 +1343,7 @@ function pdfScroll(toc, tabs, note) {
       var d=e.data||{};
       if(d.mopoPdf){ if(d.i!=null&&d.i!==curTab) return; if(d.part!=null&&d.part!==curPart) return; showPdf(); boot(new Uint8Array(d.mopoPdf)); }
       if(d.mopoHtml!=null){ if(d.i!=null&&d.i!==curTab) return; showHtml(d.mopoHtml); }
-      if(d.mopoErr&&(d.i==null||d.i===curTab)){ busyTab=false; wait("Не удалось открыть: "+d.mopoErr+"<br><br>Нажмите вкладку ещё раз."); }
+      if(d.mopoErr&&(d.i==null||d.i===curTab)){ busyTab=false; if(PEND){ PEND=null; parent.postMessage({mopo:"notfound"},"*"); } wait("Не удалось открыть: "+d.mopoErr+"<br><br>Нажмите вкладку ещё раз."); }
     });
     var tsel=document.getElementById("tsel"), tnum=document.getElementById("tnum");
     var tpart=document.getElementById("tpart"), ptxt=document.getElementById("ptxt"), curPart=0;
@@ -1312,10 +1361,10 @@ function pdfScroll(toc, tabs, note) {
       wait("Загружаем «"+((TABS[i]||{}).name||"лист")+"»"+(((TABS[i]||{}).parts||1)>1?", часть "+(curPart+1):"")+"… первое открытие может занять пару минут");
       parent.postMessage({mopo:"needsheet",i:i,part:curPart},"*");
     }
-    if(tsel) tsel.onchange=function(){ askTab(+tsel.value,0); };
+    if(tsel) tsel.onchange=function(){ PEND=null; askTab(+tsel.value,0); };
     if(tpart){
-      document.getElementById("pprev").onclick=function(){ if(curPart>0) askTab(curTab,curPart-1); };
-      document.getElementById("pnext").onclick=function(){ var n=(TABS[curTab]||{}).parts||1; if(curPart<n-1) askTab(curTab,curPart+1); };
+      document.getElementById("pprev").onclick=function(){ PEND=null; if(curPart>0) askTab(curTab,curPart-1); };
+      document.getElementById("pnext").onclick=function(){ PEND=null; var n=(TABS[curTab]||{}).parts||1; if(curPart<n-1) askTab(curTab,curPart+1); };
     }
     if(TABS.length) askTab(0,0); else { wait("Готовим документ…"); parent.postMessage({mopo:"pdfready"},"*"); }
   })().catch(function(e){ document.getElementById("pages").innerHTML='<div id="msg">Не удалось показать файл: '+e.message+'</div>'; });<\/script></body></html>`;
@@ -1693,10 +1742,14 @@ function openLesson(l, at, quote) {
     const d = e.data || {};
     if (d.mopo === "ready") {
       post({ mopo: "reset", list: marks() });
-      if (quote) setTimeout(() => post({ mopo: "focus", text: quote }), 250);
+      if (quote) {
+        const qn = notesOf(l.id).filter(n => n.quote === quote)[0];
+        setTimeout(() => post({ mopo: "focus", text: quote, place: (qn && qn.place) || "" }), 250);
+      }
     }
     if (d.mopo === "opendoc") { openDocUrl(d.url); return; }
     if (d.mopo === "notfound") { toast("Это место в документе не нашлось — возможно, документ обновили"); return; }
+    if (d.mopo === "searching") { toast("Ищем это место на других листах таблицы…"); return; }
     if (d.mopo === "openlesson" && own) { openLessonById(d.id); return; }    /* «где посмотреть» в разборе — урок поверх разбора */
     if (d.mopo === "quote") {
       if (v.classList.contains("nonotes")) {           /* панель была спрятана — показываем, иначе заметка «пропадёт» */
@@ -1704,7 +1757,7 @@ function openLesson(l, at, quote) {
       }
       showTab("note");
       const ta = v.querySelector(".ntext");
-      ta.dataset.quote = d.text; ta.focus();
+      ta.dataset.quote = d.text; ta.dataset.place = d.place || ""; ta.focus();
       if (window.innerWidth < 900) setTimeout(() => { try { ta.scrollIntoView({ block: "center", behavior: "smooth" }); } catch (e) { } }, 60);
       v.querySelector(".qprev") && v.querySelector(".qprev").remove();
       ta.insertAdjacentHTML("beforebegin", `<div class="nquote qprev"><span>«${esc(d.text)}»</span>
@@ -1713,7 +1766,7 @@ function openLesson(l, at, quote) {
       v.querySelector('[data-a="clear"]').hidden = false;
     }
     if (d.mopo === "hl") {
-      save("note.save", { lessonId: l.id, kind: "hl", quote: d.text, color: d.color });
+      save("note.save", { lessonId: l.id, kind: "hl", quote: d.text, color: d.color, place: d.place || "" });
       draw(); showTab("hl"); post({ mopo: "reset", list: marks() });
       toast("Выделение сохранено");
     }
@@ -1743,7 +1796,7 @@ function openLesson(l, at, quote) {
     });
     v.querySelectorAll("[data-go]").forEach(b => b.onclick = () => {
       const n = notesOf(l.id).filter(x => x.id === b.dataset.go)[0];
-      if (n && n.quote) post({ mopo: "focus", text: n.quote });
+      if (n && n.quote) post({ mopo: "focus", text: n.quote, place: n.place || "" });
     });
     v.querySelectorAll("[data-rc]").forEach(b => b.onclick = () => {
       save("note.update", { id: b.dataset.rc, lessonId: l.id, color: Number(b.dataset.c) }); draw(); post({ mopo: "reset", list: marks() });
@@ -1763,7 +1816,7 @@ function openLesson(l, at, quote) {
     const ta = v.querySelector(".ntext"), ti = v.querySelector(".ntime");
     const text = ta.value.trim();
     if (!text) { toast("Напишите текст заметки"); return; }
-    save("note.save", { lessonId: l.id, kind: "note", text: text, time: ti ? ti.value.trim() : "", quote: ta.dataset.quote || "" });
+    save("note.save", { lessonId: l.id, kind: "note", text: text, time: ti ? ti.value.trim() : "", quote: ta.dataset.quote || "", place: ta.dataset.quote ? ta.dataset.place || "" : "" });
     clearDraft(); draw(); post({ mopo: "reset", list: marks() }); toast("Заметка сохранена");
   };
   draw(); showTab(textual ? tab : "note");
@@ -2948,7 +3001,7 @@ async function demoCall(action, d) {
       const st = demoState(); st.notes = st.notes || {};
       const id = d.id || "n" + Date.now();
       (st.notes[d.lessonId] = st.notes[d.lessonId] || []).push({ id: id, kind: d.kind === "hl" || d.kind === "bm" ? d.kind : "note", text: d.text || "",
-        time: d.time || "", quote: d.quote || "", color: Number(d.color) || 0, at: new Date().toISOString() });
+        time: d.time || "", quote: d.quote || "", color: Number(d.color) || 0, at: new Date().toISOString(), place: d.place || "" });
       return { ok: true, id: id };
     }
     case "note.update": {
@@ -3132,7 +3185,8 @@ async function demoCall(action, d) {
     case "admin.attempt": {
       const a = DEMO.attempts.filter(x => x.id === d.id)[0]; if (!a) return { answers: [] };
       return Object.assign(JSON.parse(JSON.stringify(a)), { kind: a.kind || "exam", sentAt: a.sentAt || "",
-        retakes: DEMO.retakes.filter(r => r.fromAttempt === a.id).map(r => ({ id: r.id, status: r.status, opensAt: r.opensAt || "", count: r.questions.length, available: demoRtLive(r) })) });
+        retakes: DEMO.retakes.filter(r => r.fromAttempt === a.id).map(r => ({ id: r.id, status: r.status, opensAt: r.opensAt || "", count: r.questions.length, available: demoRtLive(r),
+          parts: r.status === "draft" ? (r.plan || []).length : 0, built: new Set(r.questions.map(q => q.chunk).filter(k => k !== undefined)).size })) });
     }
     /* ---- пересдача в демо: те же шаги, что на сервере; задания «от ИИ» — заготовки по ошибкам ---- */
     case "admin.reportSend": { const a = DEMO.attempts.filter(x => x.id === d.id)[0]; if (!a) return { error: "Попытка не найдена" };
@@ -3148,6 +3202,12 @@ async function demoCall(action, d) {
                                minutes: 120, questions: [], plan: plan.chunks });
         demoKeep(); return { id: id, chunks: plan.chunks.length, done: 0, total: 0, planned: plan.total, dup: plan.dup, byBlock: plan.byBlock,
                              need: plan.chunks.map(c => demoRtNeed(program, c)) };
+      }
+      if (d.resume) {
+        const r0 = DEMO.retakes.filter(x => x.id === d.id)[0]; if (!r0) return { error: "Пересдача не найдена" };
+        const plan0 = demoRtPlan(a.answers || [], program), got = [...new Set(r0.questions.map(q => q.chunk).filter(k => k !== undefined))];
+        return { id: r0.id, chunks: r0.plan.length, doneChunks: got, total: r0.questions.length, planned: plan0.total, dup: plan0.dup, byBlock: plan0.byBlock,
+                 need: r0.plan.map(c => demoRtNeed(program, c)) };
       }
       await new Promise(res => setTimeout(res, 150 + Math.random() * 300));
       const r = DEMO.retakes.filter(x => x.id === d.id)[0]; if (!r) return { error: "Пересдача не найдена" };

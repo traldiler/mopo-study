@@ -150,6 +150,10 @@ async function admAttempts() {
     </div><div id="atbl"></div></div>`;
   let list = [];
   try { list = (await api("admin.attempts")).attempts || []; } catch (e) { $("#ast").textContent = e.message; return; }
+  if (!list.length && !APP.demo) {                                /* пусто в памяти — сверяемся с сервером напрямую */
+    try { const v = await apiRaw("admin.attempts"); list = v.attempts || []; SWR["admin.attempts{}"] = { v: v, at: Date.now() }; }
+    catch (e) { $("#ast").textContent = "Не удалось загрузить попытки: " + e.message + ". Обновите страницу."; return; }
+  }
   const F = ADM.att = ADM.att || { seg: "work", who: "", ver: "", sort: "new" };
   const nArch = list.filter(a => a.archived).length;
   $("#ast").textContent = list.length ? "Нажмите на строку, чтобы открыть ответы. Старые и пробные попытки можно убрать в архив или удалить." : "Пока ни одной сданной попытки.";
@@ -274,7 +278,10 @@ const RT_STATE = r => r.status === "done" ? { t: "сдана", c: "ok" }
   : r.available ? { t: "открыта сотруднику", c: "ok" }
   : r.status === "approved" && r.opensAt ? { t: "откроется " + new Date(r.opensAt).toLocaleDateString("ru-RU"), c: "wait" }
   : r.status === "approved" ? { t: "утверждена, доступ закрыт", c: "retry" }
+  : rtBroken(r) ? { t: "сборка прервана: готово частей " + (r.built || 0) + " из " + r.parts, c: "retry" }
   : { t: "черновик", c: "" };
+/* черновик, который ИИ не дособрал: страницу закрыли или перезагрузили во время сборки */
+const rtBroken = r => r.status === "draft" && r.parts > 0 && (r.built || 0) < r.parts;
 function attemptRetakeBox(a) {
   const box = $("#rtbox"); if (!box) return;
   const wrong = (a.answers || []).filter(r => !r.needsReview && r.correct !== true).length;
@@ -285,8 +292,11 @@ function attemptRetakeBox(a) {
         <small>${a.sentAt ? "Отправлен — сотрудник видит свои ошибки с правильными ответами и ссылками на уроки. Скачать его нельзя." : "Сотрудник увидит разбор только после этой кнопки. Пока идёт пересдача, разбор у него скрыт."}</small></div>
       <button class="btn small ${a.sentAt ? "white" : ""}" id="asend" type="button">${a.sentAt ? "Убрать из кабинета" : "Отправить разбор в кабинет МОПО"}</button></div>
     ${list.map(r => { const st = RT_STATE(r); return `<div class="rtline"><div><b>Пересдача · ${r.count} ${plural(r.count, "задание", "задания", "заданий").replace(/^\d+\s/, "")}</b>
-        <small><span class="tag ${st.c}">${esc(st.t)}</span></small></div>
-      <button class="btn small white" data-rt="${esc(r.id)}" type="button">${r.status === "done" ? "Посмотреть" : "Открыть"}</button></div>`; }).join("")}
+        <small><span class="tag ${st.c}">${esc(st.t)}</span>${rtBroken(r) ? " Готовые задания сохранены: можно дособрать недостающие части или открыть черновик как есть и дописать вручную." : ""}</small></div>
+      ${rtBroken(r) ? `<div class="rtbtns"><button class="btn small" data-rtc="${esc(r.id)}" type="button">Продолжить сборку</button>
+        <button class="btn small white" data-rt="${esc(r.id)}" type="button">Открыть</button>
+        <button class="btn small white" data-rtd="${esc(r.id)}" type="button">Удалить</button></div>`
+      : `<button class="btn small white" data-rt="${esc(r.id)}" type="button">${r.status === "done" ? "Посмотреть" : "Открыть"}</button>`}</div>`; }).join("")}
     ${a.kind !== "retake" && wrong ? `<div class="rtline"><div><b>Индивидуальная пересдача</b>
         <small>Ошибок: ${wrong}. ИИ составит ${wrong > 100 ? "100" : wrong > 80 ? wrong : "80"} заданий: не больше 15% — переформулировки заданий с ошибками, остальное — новые вопросы по материалам уроков. Больше всего — по блокам, где больше всего ошибок, дальше по убыванию, плюс по одному вопросу из блоков без ошибок. Время — 2 часа, как у экзамена. Получится черновик: вы его проверите, утвердите и откроете сотруднику — сразу или с нужной даты.${rev ? " Задания на ручной проверке (" + rev + ") не считаются ошибками — сначала поставьте по ним балл." : ""}</small></div>
       <button class="btn small" id="artgen" type="button">Сформировать пересдачу</button></div>` : ""}`;
@@ -299,29 +309,59 @@ function attemptRetakeBox(a) {
     } catch (e) { fail(e); }
   });
   box.querySelectorAll("[data-rt]").forEach(b => b.onclick = () => admRetake(b.dataset.rt, a));
+  box.querySelectorAll("[data-rtc]").forEach(b => b.onclick = once(async () => {
+    const id = await retakeGenerate(a, b.dataset.rtc);
+    if (id) admRetake(id, a);
+  }));
+  box.querySelectorAll("[data-rtd]").forEach(b => b.onclick = once(async () => {
+    if (!await ask({ title: "Удалить черновик?", ok: "Удалить", danger: true, text: "Недособранная пересдача будет удалена вместе с готовыми заданиями. Новую можно сформировать заново." })) return;
+    try { await api("admin.retakeDel", { id: b.dataset.rtd }); a.retakes = (a.retakes || []).filter(x => x.id !== b.dataset.rtd); attemptRetakeBox(a); toast("Черновик удалён"); }
+    catch (e) { fail(e); }
+  }));
   if ($("#artgen")) $("#artgen").onclick = once(async () => {
-    if (list.some(r => r.status !== "done") && !await ask({ title: "Уже есть пересдача", ok: "Сформировать ещё одну",
+    const broken = list.filter(rtBroken)[0];
+    if (broken && await ask({ title: "Есть недособранный черновик", ok: "Продолжить его", cancel: "Собрать новый",
+        text: "Прошлая сборка прервалась: готово частей " + (broken.built || 0) + " из " + broken.parts + ". Быстрее и дешевле дособрать её, чем начинать заново." })) {
+      const id0 = await retakeGenerate(a, broken.id); if (id0) admRetake(id0, a); return;
+    }
+    if (list.some(r => r.status !== "done" && r !== broken) && !await ask({ title: "Уже есть пересдача", ok: "Сформировать ещё одну",
         text: "По этой попытке уже есть несданная пересдача. Новая соберётся отдельным черновиком — лишнюю потом можно удалить." })) return;
     const id = await retakeGenerate(a);
     if (id) admRetake(id, a);
   });
 }
 /* ИИ собирает черновик частями по 5 заданий, три части одновременно: иначе 80 заданий готовились бы четверть часа */
-async function retakeGenerate(a) {
+async function retakeGenerate(a, resumeId) {
   const back = el("div", "modal-back");
   back.innerHTML = `<div class="modal" role="dialog" aria-modal="true" style="max-width:520px">
     <b>Собираем пересдачу</b><p id="rgst">Считаем, сколько заданий нужно по каждому блоку…</p>
     <div class="bar"><i id="rgbar" style="width:3%"></i></div>
     <div id="rgplan" class="rgplan"></div>
-    <p class="hint">Обычно 4–8 минут. Не закрывайте страницу — готовые задания сохраняются по ходу.</p>
-    <div class="mbtns" id="rgbtns" hidden></div></div>`;
+    <p class="hint">Обычно 4–8 минут. Не закрывайте страницу — готовые задания сохраняются по ходу. Если всё же закрыли — сборку можно будет продолжить.</p>
+    <div class="mbtns" id="rgbtns" hidden></div>
+    <div class="mbtns"><button class="btn ghost" id="rgcancel" type="button">Отменить сборку</button></div></div>`;
   document.body.appendChild(back); lockScroll(true);
   const close = () => { back.remove(); lockScroll(false); };
+  /* отмена: новые части не отправляем, начатые дожидаемся, недособранный черновик удаляем */
+  let stop = false, cancelled = false, wake = null;
+  back.querySelector("#rgcancel").onclick = () => {
+    if (cancelled) return;
+    cancelled = stop = true;
+    const b = back.querySelector("#rgcancel"); b.disabled = true; b.textContent = "Отменяем… дождёмся начатых частей";
+    if (wake) wake("cancel");                                 /* если висит вопрос «повторить части?» — снимаем его */
+  };
+  const cancelNow = async (id) => {
+    if (resumeId) { close(); toast("Сборка остановлена — черновик сохранён, продолжить можно позже"); return null; }   /* дособираемый черновик не удаляем */
+    if (id) { try { await api("admin.retakeDel", { id: id }); } catch (e) { /* черновик можно удалить и в списке пересдач */ } }
+    close(); toast("Сборка пересдачи отменена, черновик удалён");
+    return null;
+  };
   const st = t => { back.querySelector("#rgst").textContent = t; };
   const bar = p => { back.querySelector("#rgbar").style.width = Math.max(3, Math.round(p * 100)) + "%"; };
   let head;
-  try { head = await api("admin.retakeGenerate", { attemptId: a.id }); }
-  catch (e) { close(); fail(e); return null; }
+  try { head = await api("admin.retakeGenerate", resumeId ? { attemptId: a.id, id: resumeId, resume: true } : { attemptId: a.id }); }
+  catch (e) { close(); if (!cancelled) fail(e); return null; }
+  if (cancelled) return cancelNow(head.id);
   const plan = (head.byBlock || []).slice().sort((x, y) => y.count - x.count || blockNum(x.n) - blockNum(y.n));
   /* конспекты на сайте зашифрованы — текст для ИИ расшифровывает этот браузер и отправляет вместе с частью */
   const texts = {};
@@ -340,8 +380,9 @@ async function retakeGenerate(a) {
   back.querySelector("#rgplan").innerHTML = plan.length ? `<div class="hint"><b>План: ${plural(head.planned, "задание", "задания", "заданий")}</b></div>` +
     `<div class="hint">Новых по материалам — ${head.planned - (head.dup || 0)}, переформулировок заданий экзамена — ${head.dup || 0}</div>` +
     plan.map(b => `<div class="rgrow"><span>${blockNum(b.n)}. ${esc(bt(b.n))}${b.noText ? ' <em title="У блока нет текстовых материалов — новые вопросы по фактам из ключа экзамена">· нет текстов, по ключу</em>' : ""}</span><b>${b.count}</b><i>${b.errors ? "ошибок " + b.errors : "без ошибок"}</i></div>`).join("") : "";
-  const todo = [...Array(head.chunks).keys()], failed = [];
-  let done = 0, total = 0, stop = false;
+  const had = new Set(head.doneChunks || []);                  /* при продолжении — только недостающие части */
+  const todo = [...Array(head.chunks).keys()].filter(k => !had.has(k)), failed = [];
+  let done = had.size, total = head.total || 0;
   const paint = () => { st(`Составляем задания: готово ${done} из ${head.chunks} частей${total ? " · заданий " + total : ""}…`); bar(done / head.chunks); };
   const worker = async () => {
     while (todo.length && !stop) {
@@ -356,20 +397,26 @@ async function retakeGenerate(a) {
   };
   paint();
   await Promise.all([worker(), worker(), worker()]);
+  if (cancelled) return cancelNow(head.id);
   /* что не получилось — предлагаем повторить только эти части */
   while (failed.length) {
     const list = failed.splice(0);
     const c = await new Promise(res => {
+      wake = res;
       st(`Не получилось частей: ${list.length} из ${head.chunks} (${list[0].msg}). Остальные задания сохранены.`);
       const b = back.querySelector("#rgbtns"); b.hidden = false;
       b.innerHTML = `<button class="btn ghost" data-c="skip" type="button">Дальше без них</button><button class="btn" data-c="retry" type="button">Повторить эти части</button>`;
       b.querySelectorAll("[data-c]").forEach(x => x.onclick = () => { b.hidden = true; res(x.dataset.c); });
     });
+    wake = null;
+    if (c === "cancel" || cancelled) return cancelNow(head.id);
     if (c !== "retry") break;
     done = head.chunks - list.length; todo.push(...list.map(x => x.k)); paint();
     await Promise.all([worker(), worker(), worker()]);
+    if (cancelled) return cancelNow(head.id);
   }
   bar(1); close();
+  if (a.retakes) a.retakes = a.retakes.filter(x => x.id !== head.id);   /* список пересдач перечитается при следующем открытии попытки */
   toast(total ? "Черновик готов: " + plural(total, "задание", "задания", "заданий") + ". Проверьте и утвердите." : "ИИ не смог составить задания — добавьте их вручную");
   return head.id;
 }
@@ -616,6 +663,69 @@ async function reportPdf(blocks, css, fileName) {
 /* ---------- печать отчётов ---------- */
 /* макет отчёта: один для PDF руководителя и для разбора в кабинете сотрудника.
    opts.inApp — ссылки «где посмотреть» открывают урок прямо в кабинете */
+/* ---------- подпись «где посмотреть» из ключа экзамена → уроки программы ---------- */
+const srcNorm = t => String(t || "").toLowerCase().replace(/ё/g, "е").replace(/[^a-zа-я0-9]+/g, " ").trim();
+function srcLessons() {
+  const out = []; ((PR.program && PR.program.blocks) || []).forEach(b => b.subs.forEach(sub => sub.lessons.forEach(l => out.push(l))));
+  return out;
+}
+/* подпись → список мест: { type: расшифровка|документ|таблица|презентация|"", name, detail }.
+   Места разделены « / » или «;» вне кавычек; «расшифровки «A», «B»» — несколько мест подряд; прочие «…» — уточнение (раздел, этап, вкладка) */
+function srcSplit(src, isMat) {
+  const segs = []; let depth = 0, cur = "";
+  const s = String(src || "");
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === "«") depth++; else if (ch === "»") depth = Math.max(0, depth - 1);
+    if (!depth && (ch === ";" || (ch === "/" && s[i - 1] === " " && s[i + 1] === " "))) { segs.push(cur); cur = ""; continue; }
+    cur += ch;
+  }
+  segs.push(cur);
+  const TYPE = /^(расшифровк[а-я]*|документ[а-я]*|таблиц[а-я]*|презентаци[а-я]*)/i;
+  const typeOf = w => /^расшифр/i.test(w) ? "расшифровка" : /^документ/i.test(w) ? "документ" : /^таблиц/i.test(w) ? "таблица" : /^презентац/i.test(w) ? "презентация" : "";
+  const out = []; let lastType = "";
+  segs.forEach(seg => {
+    let t = seg.trim(); if (!t) return;
+    const tm = t.match(TYPE); let type = lastType;
+    if (tm) { type = typeOf(tm[1]); t = t.slice(tm[0].length).trim(); }
+    lastType = type;
+    /* кавычки верхнего уровня с позициями */
+    const qs = []; depth = 0; let st = -1;
+    for (let i = 0; i < t.length; i++) {
+      if (t[i] === "«") { if (!depth) st = i; depth++; }
+      else if (t[i] === "»" && depth) { depth--; if (!depth) qs.push({ a: st, b: i + 1, name: t.slice(st + 1, i) }); }
+    }
+    if (!qs.length) { if (out.length && !tm) out[out.length - 1].detail = [out[out.length - 1].detail, t].filter(Boolean).join(", "); return; }
+    /* место: первая кавычка сегмента и те, что идут через запятую сразу за местом (скобка-пояснение между ними допустима) */
+    const mats = [0];
+    for (let k = 1; k < qs.length; k++) {
+      const gap = t.slice(qs[k - 1].b, qs[k].a);
+      if (mats[mats.length - 1] === k - 1 && /^\s*(\([^)]*\))?\s*,\s*$/.test(gap) && (!isMat || isMat(qs[k].name, type))) mats.push(k);
+    }
+    mats.forEach((k, j) => {
+      const end = j + 1 < mats.length ? qs[mats[j + 1]].a : t.length;
+      let detail = t.slice(qs[k].b, end).replace(/^[\s,;.:—-]+|[\s,;:—-]+$/g, "").replace(/^\((.*)\)$/, "$1").trim();
+      if (!j && qs[k].a > 0) detail = [t.slice(0, qs[k].a).replace(/[\s,;:—-]+$/g, "").trim(), detail].filter(Boolean).join(", ");
+      out.push({ type: type, name: qs[k].name.trim(), detail: detail });
+    });
+  });
+  return out;
+}
+/* название из подписи → урок: точное совпадение или начало названия; при равенстве — урок подходящего вида */
+function srcLesson(name, type, ls) {
+  const n = srcNorm(name); if (n.length < 4) return null;
+  const want = { "расшифровка": ["видео"], "документ": ["документ", "файл", "шаблон", "конспект"], "таблица": ["таблица", "файл"], "презентация": ["презентация"] }[type] || [];
+  let best = null, bs = 0;
+  ls.forEach(l => {
+    const t = srcNorm(l.title); if (!t) return;
+    let sc = t === n ? 3 : (t.length >= 10 && n.indexOf(t) === 0) || (n.length >= 10 && t.indexOf(n) === 0) ? 2
+      : n.length >= 15 && t.indexOf(n) > 0 ? 2 : 0;                  /* «Обучение «Как работать с файлом …»» */
+    if (!sc) return;
+    if (want.indexOf(l.kind) >= 0) sc += 0.5; else if (type && want.length && l.kind === "видео") sc -= 1;   /* «документ «X»» не ведём в видео X, если есть сам документ */
+    if (sc > bs) { bs = sc; best = l; }
+  });
+  return bs >= 2 ? best : null;
+}
 function reportParts(a, mode, opts) {
   opts = opts || {};
   const full = mode === "full";
@@ -625,8 +735,11 @@ function reportParts(a, mode, opts) {
   const items = full ? all : wrong;
   const blocks = (a.byBlock || []).slice().sort((x, y) => blockNum(x.n) - blockNum(y.n));
   const pctOf = b => b.max ? Math.round(b.got / b.max * 100) : 0;
-  const weak = blocks.filter(b => b.max && b.got / b.max < 0.9).sort((x, y) => x.got / x.max - y.got / y.max);
   const errByBlock = {}; wrong.forEach(r => { errByBlock[r.block] = (errByBlock[r.block] || 0) + 1; });
+  /* слабые блоки: меньше процент — выше; при равном проценте выше тот, где больше ошибок (больше материала разобрать) */
+  const weak = blocks.filter(b => b.max && b.got / b.max < 0.9)
+    .sort((x, y) => (x.got / x.max - y.got / y.max) || ((errByBlock[y.n] || 0) - (errByBlock[x.n] || 0)) || (blockNum(x.n) - blockNum(y.n)));
+  const noAnswers = all.length > 0 && all.every(r => !String(r.givenText || "").trim());   /* экзамен закрыт без единого ответа */
   const cnt = a.counts || {                             /* в кабинет сотрудника сервер присылает только ошибки и готовые счётчики */
     ok: all.filter(r => !r.needsReview && r.correct === true).length,
     part: all.filter(r => !r.needsReview && r.correct !== true && Number(r.points) > 0).length,
@@ -635,14 +748,23 @@ function reportParts(a, mode, opts) {
   };
   const manual = all.filter(r => r.manual);
   const site = location.origin + location.pathname;
-  const where = r => {                                   /* «где смотреть» — ссылкой прямо на урок + точное место из ключа */
-    const ref = r.ref || null, title = (ref && ref.title) || r.source || "";
-    if (!(ref && ref.id)) return esc(title);
-    const link = opts.inApp ? `<a href="#" data-l="${esc(ref.id)}">${esc(title)}</a>`
-      : `<a href="${esc(site + "#s=cabinet&l=" + encodeURIComponent(ref.id))}">${esc(title)}</a>`;
-    const точнее = r.source && r.source !== title ? ` <span class="rp-src">(${esc(r.source)})</span>` : "";
-    return link + точнее;
+  /* «где посмотреть»: каждое место из подписи ключа — ссылкой на урок. В подписи бывает несколько мест
+     («документ «…», п. 5 / расшифровка «…»»); расшифровку не упоминаем — для видео пишем «в видео», для документов оставляем пункт или раздел */
+  const where = r => {
+    const ls = srcLessons(), seen = {}, out = [];
+    srcSplit(r.source || "", (n, t) => !!srcLesson(n, t, ls)).forEach(m => {
+      const l = srcLesson(m.name, m.type, ls);
+      const key = l ? l.id : m.name; if (seen[key]) return; seen[key] = 1;
+      const tail = [l && l.kind === "видео" ? "в видео" : "", m.detail].filter(Boolean).join(", ");
+      if (l) out.push(srcLink(l) + (tail ? ` <span class="rp-src">— ${esc(tail)}</span>` : ""));
+      else out.push(esc((m.type === "расшифровка" ? "видео" : m.type ? m.type : "") + (m.type ? " " : "") + "«" + m.name + "»" + (m.detail ? ", " + m.detail : "")));
+    });
+    if (!out.length && r.ref && r.ref.id) { const f = lessonById(r.ref.id); if (f) out.push(srcLink(f.lesson) + (f.lesson.kind === "видео" ? ` <span class="rp-src">— в видео</span>` : "")); }
+    if (!out.length) return esc(String(r.source || "").replace(/расшифровк[а-я]*/gi, "видео"));
+    return out.join("; ");
   };
+  const srcLink = l => opts.inApp ? `<a href="#" data-l="${esc(l.id)}">${esc(l.title)}</a>`
+    : `<a href="${esc(site + "#s=cabinet&l=" + encodeURIComponent(l.id))}">${esc(l.title)}</a>`;
   const manualNote = r => r.manual ? `<div class="rp-mn">✎ Балл изменён вручную: было ${r.manual.first !== undefined ? r.manual.first : r.manual.prev}, стало ${r.points}
       ${full ? `· ${esc(r.manual.by || "")}, ${esc(dayRu(r.manual.at))}${r.manual.note ? ` — «${esc(r.manual.note)}»` : ""}` : ""}</div>` : "";
   const vcls = a.verdict === "сдал" ? "ok" : a.verdict === "пересдача" ? "retry" : "fail";
@@ -709,7 +831,7 @@ function reportParts(a, mode, opts) {
     ${manual.length ? `<div class="rp-note9">✎ Ручных правок баллов: ${manual.length} — отмечены в заданиях ниже.</div>` : ""}
     <h2>Результат по блокам</h2>
     <div class="rp-note9">Полоса — процент баллов по блоку, красная черта — порог 90%.</div>${bars(blocks)}
-    ${weak.length ? `<h2>Слабые места</h2><ol>${weak.slice(0, 3).map(b => `<li><b>${blockNum(b.n)}. ${esc(b.title)}</b> — ${pctOf(b)}%${errByBlock[b.n] ? ", ошибок " + errByBlock[b.n] : ""}</li>`).join("")}</ol>` : ""}
+    ${weak.length ? `<h2>Слабые места</h2>${noAnswers ? `<div class="rp-note9">Ответов в экзамене нет — порядок блоков ниже по числу ошибок, а не по знаниям.</div>` : ""}<ol>${weak.slice(0, 3).map(b => `<li><b>${blockNum(b.n)}. ${esc(b.title)}</b> — ${pctOf(b)}%${errByBlock[b.n] ? ", ошибок " + errByBlock[b.n] : ""}</li>`).join("")}</ol>` : ""}
     <h2>Ответы по заданиям</h2>`
   : `<h1>Разбор экзамена — ${esc(a.fio)}</h1>
     <div class="rp-meta">${new Date(a.finishedAt).toLocaleDateString("ru-RU")} · этот разбор показывает, где были ошибки и что повторить</div>
@@ -719,7 +841,9 @@ function reportParts(a, mode, opts) {
     <div class="rp-stack">${seg("ok", "верно")}${seg("part", "частично")}${seg("rev", "на проверке")}${seg("bad", "неверно")}</div>
     <div class="rp-lg">${legend("ok", "верно")}${legend("part", "частично")}${legend("bad", "неверно")}${cnt.rev ? legend("rev", "проверяет руководитель") : ""}</div>
     ${weak.length ? `<h2>Где подтянуть</h2><div class="rp-note9">Блоки, где результат ниже 90%. Красная черта — порог.</div>${bars(weak)}
-      <h2>С чего начать</h2><ol>${weak.slice(0, 3).map(b => `<li><b>${blockNum(b.n)}. ${esc(b.title)}</b> — ${b.got / b.max < 0.6 ? "стоит пройти блок заново." : "повторите материал и разберите ошибки ниже."}</li>`).join("")}</ol>` : ""}
+      <h2>С чего начать</h2>${noAnswers
+        ? `<p>Ответов в экзамене нет — по нему нельзя понять, какие темы слабее. Пройдите обучение по порядку блоков, затем разберите задания ниже.</p>`
+        : `<div class="rp-note9">Сначала блоки с самым низким результатом, при равном — где больше ошибок.</div><ol>${weak.slice(0, 3).map(b => `<li><b>${blockNum(b.n)}. ${esc(b.title)}</b> — ${pctOf(b)}%, ошибок ${errByBlock[b.n] || 0}: ${b.got / b.max < 0.6 ? "стоит пройти блок заново." : "повторите материал и разберите ошибки ниже."}</li>`).join("")}</ol>`}` : ""}
     <h2>Задания с ошибками (${wrong.length})</h2>`;
 
   const cards = items.map((r, i) => `<div class="rp-q ${r.correct === true ? "" : "bad"}">
