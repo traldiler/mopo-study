@@ -204,7 +204,7 @@ async function attemptDelete(a, then) {
 }
 async function admAttempt(id, ready) {
   const host = $("#admbody");
-  if (!ready) host.innerHTML = `<div class="card"><p class="lead">Загружаем ответы…</p></div>`;
+  if (!ready) host.innerHTML = `<div class="card" id="aload"><p class="lead">Загружаем ответы…</p></div>`;
   let a;
   try {
     a = ready || await api("admin.attempt", { id: id });
@@ -213,7 +213,8 @@ async function admAttempt(id, ready) {
     if (!полная(a)) { Object.keys(SWR).forEach(k => { if (k.indexOf("admin.attempt{") === 0) delete SWR[k]; }); a = await apiRaw("admin.attempt", { id: id }); }
     if (!полная(a)) throw new Error("Сервер прислал попытку без ответов (" + (a ? Object.keys(a).slice(0, 6).join(", ") || "пусто" : "пусто") + "). Обновите страницу и откройте ещё раз");
     if (!PR.program) PR.program = await api("program");
-  } catch (e) { host.innerHTML = `<div class="card"><p class="lead">${esc(e.message)}</p><div class="foot"><button class="btn ghost" id="aback" type="button">← Ко всем</button></div></div>`; $("#aback").onclick = admAttempts; return fail(e); }
+  } catch (e) { host.innerHTML = `<div class="card" id="aload"><p class="lead">${esc(e.message)}</p><div class="foot"><button class="btn ghost" id="aback" type="button">← Ко всем</button>
+      <button class="btn" id="aretry" type="button">Попробовать ещё раз</button></div></div>`; $("#aback").onclick = admAttempts; $("#aretry").onclick = () => admAttempt(id); return fail(e); }
   const byBlock = (a.byBlock || []).slice().sort((x, y) => blockNum(x.n) - blockNum(y.n));
   const vcls = a.verdict === "сдал" ? "ok" : a.verdict === "пересдача" ? "retry" : "fail";
   host.innerHTML = `<div class="card">

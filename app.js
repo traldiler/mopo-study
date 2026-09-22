@@ -14,7 +14,7 @@ function swrRedraw() {
   if (typeof PREP !== "undefined" && PREP.run) return;               /* идёт подготовка копий — страницу настроек не трогаем */
   const busy = document.querySelector(".modal-back, .viewer") || /INPUT|TEXTAREA|SELECT/.test((document.activeElement || {}).tagName || "");
   if (busy || !/^adm:/.test(APP.screen || "")) return;
-  if (document.getElementById("alist") || document.getElementById("qelist") || document.getElementById("rtlist")) return;   /* открыт разбор попытки или редактор теста */
+  if (document.getElementById("alist") || document.getElementById("qelist") || document.getElementById("rtlist") || document.getElementById("aload")) return;   /* открыт разбор попытки или редактор теста */
   const y = window.scrollY;
   if (ADM.tab === "materials" && $("#ltbl")) admMaterials();          /* список остаётся на экране, пока готовится новый */
   else screenAdmin();
@@ -56,11 +56,17 @@ async function apiRaw(action, data) {
   /* сервер Google иногда отвечает сбоем вместо данных — чтение повторяем сами, запись не дублируем */
   const safe = /^(boot|program|progress\.get|me|my\.questions|mat\.key|quiz\.overrides|exam\.extra|quiz\.review|doc\.get|doc\.sheet|my\.exams|my\.report|retake\.start|admin\.(retakes|retakeGet|users|students|attempts|attempt|questions|badges|materials|resets|examList|examGet|quizGet))$/.test(action);
   let j = null;
-  for (let tryN = 0; tryN < 3; tryN++) {
+  /* Google передаёт ответ скрипта через второй свой сервер, и тот иногда зависает или теряет ответ (404), хотя скрипт уже всё сделал.
+     Чтение повторяем до 5 раз с растущей паузой и обрываем зависший запрос через 25 с; запись повторяем только при 404, как раньше */
+  const tries = safe ? 5 : 3;
+  for (let tryN = 0; tryN < tries; tryN++) {
+    const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const cut = ctl && safe ? setTimeout(() => ctl.abort(), 25000) : null;
     try {
       const r = await fetch(window.API_URL, {
         method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify(Object.assign({ action: action, token: APP.token }, data || {}))
+        body: JSON.stringify(Object.assign({ action: action, token: APP.token }, data || {})),
+        signal: ctl ? ctl.signal : undefined
       });
       const txt = await r.text();
       try { j = JSON.parse(txt); }
@@ -68,14 +74,16 @@ async function apiRaw(action, data) {
         const t = (txt.match(/<title>([^<]*)/i) || [])[1] || txt.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").slice(0, 120);
         throw new Error("bad:" + r.status + " " + t);
       }
+      if (cut) clearTimeout(cut);
       break;
     } catch (e) {
+      if (cut) clearTimeout(cut);
       j = null;
-      const bad = /^bad:/.test(e.message || "");
-      /* Google отдал свою страницу 404 (так бывает сразу после выкладки новой версии) — до скрипта запрос не дошёл, повтор безопасен */
+      const bad = /^bad:/.test(e.message || ""), slow = e && e.name === "AbortError";
       const again = safe || (bad && /^bad:404/.test(e.message));
-      if (tryN === 2 || !again) throw new Error(bad ? "Сбой сервера Google (" + e.message.slice(4).trim() + "). Попробуйте ещё раз" : "Сервер не ответил — проверьте интернет и попробуйте ещё раз");
-      await new Promise(res => setTimeout(res, 800 * (tryN + 1)));
+      if (tryN === tries - 1 || !again) throw new Error(slow ? "Google долго не отвечает — попробуйте ещё раз через минуту"
+        : bad ? "Сбой сервера Google (" + e.message.slice(4).trim() + "). Попробуйте ещё раз" : "Сервер не ответил — проверьте интернет и попробуйте ещё раз");
+      await new Promise(res => setTimeout(res, 1000 * (tryN + 1)));
     }
   }
   if (j && j.code === "auth") { logout(true); throw new Error("Сессия истекла — войдите заново"); }
