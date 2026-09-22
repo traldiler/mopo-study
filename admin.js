@@ -1481,6 +1481,16 @@ async function admSettings() {
             '<span class="hint tiny">Чтобы включить ночное обновление, в редакторе скрипта выберите функцию prepNightly, нажмите «Выполнить» и разрешите доступ.</span>');
         }
       }
+      /* журнал ночного обновления: запускалось ли и что успело */
+      if (ab && st.night) {
+        const L = st.night.last, tz = st.night.tz ? " (время сервера — " + st.night.tz + ")" : "";
+        const when = L && L.at ? new Date(L.at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "";
+        const txt = !L ? "Ночное обновление ещё ни разу не запускалось" + tz + "."
+          : "Последний запуск ночного обновления: " + when + " — готово " + L.done + (L.left ? ", осталось " + L.left + " (продолжение назначено само)" : ", всё сделано") +
+            (L.errs ? ", ошибок " + L.errs + (L.err ? ": " + L.err : "") : "") + "." + tz;
+        const old = document.getElementById("prepnight"); if (old) old.remove();
+        ab.closest("label").insertAdjacentHTML("afterend", `<p class="hint tiny" id="prepnight">${esc(txt)}</p>`);
+      }
       await prepStat();                                  /* строку состояния рисует общая функция */
     } catch (e) { $("#prepstat").textContent = "Не удалось узнать состояние копий: " + (e.message || e); }
   })();
