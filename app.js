@@ -2732,6 +2732,20 @@ function demoApply(m, op) {
     if (i >= 0 && j >= 0 && j < all.length) { const t = all[i]; all[i] = all[j]; all[j] = t; }
     all.forEach((x, k) => x.order = k + 1);
   }
+  if (op.t === "blockOrder") {
+    const pos = {}; (d.list || []).forEach((n, k) => { pos[String(n)] = k + 1; });
+    m.blocks.forEach(x => { if (pos[String(x.n)]) x.order = pos[String(x.n)]; });
+    m.blocks.sort((a, b) => a.order - b.order).forEach((x, k) => x.order = k + 1);
+  }
+  if (op.t === "subOrder") {
+    const pos = {}; (d.list || []).forEach((id, k) => { pos[String(id)] = k + 1; });
+    m.subs.filter(x => Number(x.block) === Number(d.block)).forEach(x => { if (pos[String(x.id)]) x.order = pos[String(x.id)]; });
+  }
+  if (op.t === "blockZero") {
+    m.blocks.forEach(x => x.zero = d.on && Number(x.n) === Number(d.n));
+    if (d.on) { const me = m.blocks.filter(x => Number(x.n) === Number(d.n))[0];
+      if (me) { me.order = 0; m.blocks.slice().sort((a, b) => a.order - b.order).forEach((x, k) => x.order = k + 1); } }
+  }
   if (op.t === "subQuiz") m.subs.filter(x => String(x.id) === String(d.sub)).forEach(x => x.quiz = d.quiz);
   if (op.t === "blockQuiz") m.blocks.filter(x => Number(x.n) === Number(d.block)).forEach(x => x.quiz = d.quiz);
   if (op.t === "visible") (d.kind === "block" ? m.blocks.filter(x => Number(x.n) === Number(d.id)) : d.kind === "sub" ? m.subs.filter(x => String(x.id) === String(d.id))
@@ -2770,6 +2784,8 @@ async function demoProgram() {
   const base = await demoBase();
   if (!(DEMO.matOps || []).length) return base;
   const m = await demoMat();
+  const первый = m.blocks.filter(b => b.active !== false).sort((a, b) => a.order - b.order)[0];
+  const zeroOn = !!(первый && первый.zero);
   return { quizPass: base.quizPass, quizSize: base.quizSize, legacyIds: base.legacyIds,
     blocks: m.blocks.filter(b => b.active !== false).sort((a, b) => a.order - b.order).map((b, bi) => {
       const subs = m.subs.filter(x => x.block == b.n && x.active !== false).sort((a, c) => a.order - c.order);
@@ -2777,7 +2793,7 @@ async function demoProgram() {
         .map(l => ({ id: l.id, title: l.title, kind: l.kind, url: l.url, note: l.note, ready: l.ready !== false, sub: l.sub }));
       const list = [{ title: "", quiz: "", lessons: les.filter(l => !l.sub) }]           /* без темы — перед темами */
         .concat(subs.map(x => ({ title: x.title, quiz: x.quiz || "", lessons: les.filter(l => l.sub === x.id) })));
-      return { n: b.n, num: bi + 1, title: b.title, intro: b.intro, quiz: b.quiz || "", subs: list.filter(x => x.lessons.length) };
+      return { n: b.n, num: bi + (zeroOn ? 0 : 1), title: b.title, intro: b.intro, quiz: b.quiz || "", subs: list.filter(x => x.lessons.length) };
     }) };
 }
 function demoMigrate() {                           /* id уроков стали постоянными — переносим старый демо-прогресс (повторять безопасно) */
@@ -3116,6 +3132,9 @@ async function demoCall(action, d) {
       return { ok: true };
     }
     case "admin.blockMove": await demoOp("blockMove", { n: d.n, dir: Number(d.dir) }); return { ok: true };
+    case "admin.blockOrder": await demoOp("blockOrder", { list: d.list || [] }); return { ok: true };
+    case "admin.subOrder": await demoOp("subOrder", { block: d.block, list: d.list || [] }); return { ok: true };
+    case "admin.blockZero": await demoOp("blockZero", { n: d.n, on: !!d.on }); return { ok: true, zero: !!d.on };
     case "exam.extra": {
       const m = await demoMat(), subs = {};
       m.subs.filter(x => x.active !== false).forEach(x => subs[x.id] = x);

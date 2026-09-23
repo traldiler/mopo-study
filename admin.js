@@ -1040,6 +1040,7 @@ function userForm(u, reset) {
 /* ---------- материалы ---------- */
 const MAT_KINDS = ["видео", "конспект", "схема", "тренажёр", "документ", "таблица", "презентация", "шаблон", "практика", "сайт", "ссылка"];
 const truthy = v => !(v === false || v === "FALSE" || v === "false");
+const isOn = v => v === true || v === "TRUE" || v === "true";      /* строго «да»: пустая ячейка — это нет */
 /* сколько исходных вопросов экзамена относится к каждому уроку (по уроку-источнику) */
 async function examBaseCounts() {
   if (ADM.examBase) return ADM.examBase;
@@ -1065,7 +1066,8 @@ function examStateText(st) {
 async function matData() {
   const d = await api("admin.materials");
   d.blocks = (d.blocks || []).slice().sort((a, b) => (Number(a.order) || Number(a.n)) - (Number(b.order) || Number(b.n)) || a.n - b.n);
-  let k = 0; d.blocks.forEach(b => b.num = truthy(b.active) ? ++k : "");   /* номер = место среди видимых блоков */
+  const zeroOn = isOn((d.blocks[0] || {}).zero);                        /* первый блок помечен как вводный — он «0» */
+  let k = zeroOn ? -1 : 0; d.blocks.forEach(b => b.num = truthy(b.active) ? ++k : "");   /* номер = место среди видимых блоков */
   d.subs = (d.subs || []).slice().sort((a, b) => (a.block - b.block) || (a.order - b.order));
   d.lessons = (d.lessons || []).slice().sort((a, b) => (a.block - b.block) || (a.order - b.order));
   return d;
@@ -1157,6 +1159,7 @@ async function admMaterials(local) {                 /* local — своя ко�
     }
   } catch (e) { return fail(e); }
   const box = $("#ltbl"); box.innerHTML = "";
+  box.appendChild(orderPanel(d));                   /* порядок блоков и тем — перетаскиванием, сразу наверху вкладки */
   const quizInfo = id => { const q = QZ.data && QZ.data.quizzes[id]; return q ? plural(q.questions.length, "вопрос", "вопроса", "вопросов") + " · порог " + q.pass : "мини-тест"; };
   const reload = async ok => { if (ok) { await admMaterials(d); } };
   const headBtns = (wrap, kind, row) => {
@@ -1242,6 +1245,79 @@ async function admMaterials(local) {                 /* local — своя ко�
   });
   $("#ladd").onclick = () => lessonForm(null, d);
   if (!firstLoad) window.scrollTo(0, y);
+}
+/* порядок блоков и тем: перетаскиваем мышью, номера пересчитываются сами.
+   Блок можно сделать вводным — тогда он показывается как «0», а остальные считаются с единицы */
+function orderPanel(d) {
+  const card = el("div", "card ordcard");
+  card.innerHTML = `<div class="qhead"><div><h3>Порядок блоков и тем</h3>
+      <p class="lead">Тяните блок мышью — номера пересчитаются сами. Нажмите на блок, чтобы показать его темы: их тоже можно тянуть.
+        «Вводный» — блок показывается сотрудникам как «0», остальные считаются с единицы.</p></div></div>
+    <div class="ordlist" id="ordlist"></div>`;
+  const host = card.querySelector("#ordlist");
+  const zeroN = isOn((d.blocks[0] || {}).zero) ? Number(d.blocks[0].n) : null;
+  const rowsOf = () => [...host.querySelectorAll(":scope > .ordrow")];
+  const renum = () => rowsOf().forEach((r, i) => {
+    const num = r.querySelector(".onum"), zero = zeroN !== null && i === 0 && Number(r.dataset.n) === zeroN;
+    num.textContent = zeroN !== null ? (i === 0 ? "0" : i) : i + 1;
+    r.classList.toggle("iszero", !!zero);
+  });
+  const saveBlocks = once(async () => {
+    try { await api("admin.blockOrder", { list: rowsOf().map(r => Number(r.dataset.n)) }); PR.program = null; EX.data = null;
+      toast("Порядок блоков сохранён"); await admMaterials(); } catch (e) { fail(e); }
+  });
+  const saveSubs = once(async (block, wrap) => {
+    try { await api("admin.subOrder", { block: block, list: [...wrap.querySelectorAll(".ordsub")].map(x => x.dataset.s) });
+      PR.program = null; toast("Порядок тем сохранён"); await admMaterials(); } catch (e) { fail(e); }
+  });
+  /* перетаскивание: пока тянем — двигаем строку между соседями, на отпускании сохраняем порядок */
+  const drag = (row, list, onDrop) => e => {
+    if (e.target.closest("button")) return;
+    e.preventDefault(); row.classList.add("drag");
+    const move = ev => {
+      const others = [...list.children].filter(x => x !== row && x.classList.contains(row.classList[0]));
+      let before = null;
+      for (const o of others) { const r = o.getBoundingClientRect(); if (ev.clientY < r.top + r.height / 2) { before = o; break; } }
+      if (before) list.insertBefore(row, before); else list.appendChild(row);
+      renum();
+    };
+    const up = () => {
+      document.removeEventListener("pointermove", move); document.removeEventListener("pointerup", up);
+      row.classList.remove("drag"); onDrop();
+    };
+    document.addEventListener("pointermove", move); document.addEventListener("pointerup", up);
+  };
+  d.blocks.forEach(b => {
+    const r = el("div", "ordrow" + (truthy(b.active) ? "" : " off"));
+    r.dataset.n = String(b.n);
+    r.innerHTML = `<span class="ogrip" title="Тяните, чтобы переставить">⋮⋮</span><span class="onum"></span>
+      <span class="ot">${esc(b.title)}${truthy(b.active) ? "" : ' <span class="mst off">скрыт</span>'}</span>
+      <span class="osubs"></span>
+      <button class="link ozero" type="button">${Number(b.n) === zeroN ? "Обычный блок" : "Сделать вводным"}</button>`;
+    const subs = d.subs.filter(x => Number(x.block) === Number(b.n));
+    r.querySelector(".osubs").textContent = subs.length ? plural(subs.length, "тема", "темы", "тем") : "";
+    r.onpointerdown = drag(r, host, saveBlocks);
+    r.querySelector(".ozero").onclick = once(async () => {
+      try { await api("admin.blockZero", { n: b.n, on: Number(b.n) !== zeroN }); PR.program = null; EX.data = null;
+        toast(Number(b.n) !== zeroN ? "Блок стал вводным — теперь он «0»" : "Блок снова обычный"); await admMaterials(); } catch (e) { fail(e); }
+    });
+    host.appendChild(r);
+    if (subs.length) {
+      const wrap = el("div", "ordsubs"); wrap.hidden = true;
+      subs.forEach(sb => {
+        const sr = el("div", "ordsub" + (truthy(sb.active) ? "" : " off"));
+        sr.dataset.s = String(sb.id);
+        sr.innerHTML = `<span class="ogrip">⋮⋮</span><span class="ot">${esc(sb.title)}</span>`;
+        sr.onpointerdown = drag(sr, wrap, () => saveSubs(b.n, wrap));
+        wrap.appendChild(sr);
+      });
+      host.appendChild(wrap);
+      r.querySelector(".ot").onclick = () => { wrap.hidden = !wrap.hidden; };
+      r.querySelector(".osubs").onclick = () => { wrap.hidden = !wrap.hidden; };
+    }
+  });
+  renum();
+  return card;
 }
 function lessonForm(l, d) {
   const back = el("div", "modal-back");
