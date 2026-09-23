@@ -1403,7 +1403,8 @@ function renderDoc(frame, r, ref) {
       } catch (err) { send({ mopoErr: String(err.message || err), i: i, part: part }); }
     };
     frameListen(frame, give);
-    frame.srcdoc = watermark(pdfScroll([], names, SHEET_NOTE));
+    const mon = r.monthly && r.monthly.built ? " Таблица обновляется раз в месяц — последнее обновление " + new Date(r.monthly.built).toLocaleDateString("ru-RU") + "." : "";
+    frame.srcdoc = watermark(pdfScroll([], names, SHEET_NOTE + mon));
     return;
   }
   let html = r.html || "";

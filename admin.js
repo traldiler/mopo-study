@@ -1557,6 +1557,7 @@ async function admSettings() {
         Если таблицу поправили, копия устаревает: сервис перепечатает её сам при следующем открытии, но тогда первый сотрудник подождёт.
         Кнопка ниже готовит копии заранее.</p>
       <div id="prepstat" class="hint">Смотрим, что готово…</div>
+      <p class="hint" id="prepmonth" hidden></p>
       <div class="foot prepfoot"><button class="btn white" id="prep" type="button">Подготовить копии</button>
         <button class="btn white" id="prepcheck" type="button" title="Пройти по таблицам и посмотреть, у каких листов копии устарели">Проверить, что устарело</button></div>
       <div class="prepopts">
@@ -1615,6 +1616,15 @@ async function admSettings() {
             (L.errs ? ", ошибок " + L.errs + (L.err ? ": " + L.err : "") : "") + "." + tz;
         const old = document.getElementById("prepnight"); if (old) old.remove();
         ab.closest("label").insertAdjacentHTML("afterend", `<p class="hint tiny" id="prepnight">${esc(txt)}</p>`);
+      }
+      /* таблица наличия обновляется раз в месяц — показываем, когда было и когда будет */
+      const pm = $("#prepmonth");
+      if (pm && (st.monthly || []).length) {
+        const d = x => x ? new Date(x).toLocaleDateString("ru-RU") : "";
+        pm.innerHTML = st.monthly.map(m => `<b>${esc(m.title || "Таблица наличия")}</b> обновляется раз в месяц, чтобы не сбрасывать фото: ` +
+          (m.built ? `последнее обновление — ${esc(d(m.built))}, следующее — после ${esc(d(m.next))}.` : "копия ещё не собрана.") +
+          " Ночью в это время только догружаются недостающие фото. Нужно раньше — «перепечатать все заново».").join("<br>");
+        pm.hidden = false;
       }
       await prepStat();                                  /* строку состояния рисует общая функция */
     } catch (e) { $("#prepstat").textContent = "Не удалось узнать состояние копий: " + (e.message || e); }
