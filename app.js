@@ -801,7 +801,9 @@ function lessonRow(l) {
     <div class="t">${esc(l.title)}<small>${esc(l.kind)}${l.note ? " · " + esc(l.note) : ""}${notes.length ? " · " + plural(notes.length, "заметка", "заметки", "заметок") : ""}${hls ? " · " + plural(hls, "выделение", "выделения", "выделений") : ""}</small></div>`;
   if (l.ready) {
     const ext = l.kind === "сайт" && NOFRAME.test(String(l.url));           /* такой сайт показывается только отдельной вкладкой */
-    const open = el("button", "go", ext ? "Открыть в новой вкладке ↗" : "Открыть"); open.type = "button"; open.onclick = () => openLesson(l);
+    const open = el("button", "go"); open.type = "button"; open.onclick = () => openLesson(l);
+    /* на телефоне длинная надпись сталкивала кружок отметки на вторую строку — там оставляем «Открыть ↗» */
+    open.innerHTML = ext ? 'Открыть<span class="wo"> в новой вкладке</span> ↗' : "Открыть";
     if (ext) open.title = "Этот сайт не разрешает показывать себя внутри кабинета";
     const note = el("button", "go quiet", notes.length ? "Заметки" : "Заметка"); note.type = "button"; note.onclick = () => notesFor(l);
     const star = el("button", "star" + (marked ? " on" : ""), marked ? "★" : "☆"); star.type = "button";

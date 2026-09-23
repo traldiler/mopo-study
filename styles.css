@@ -1656,6 +1656,9 @@ label.f{font-family:var(--f-text); font-size:13px; font-weight:600; letter-spaci
   .mdel, .mshow, .mbtn button, table.bt button, .atact button,
   .missrow, .qseg button, .nseg button{min-height:38px; padding-left:10px; padding-right:10px;}
   #pweye, .pwrow button{min-height:38px;}
+  .wo{display:none;}                       /* «в новой вкладке» — только на широком экране */
+  /* кружки маркеров — кружки: у них своя ширина, от общей «кнопочной» высоты они вытягивались в овал */
+  .hlfilter .mk, .mkrow .mk{min-height:0; width:30px; height:30px; padding:0; border-radius:50%; flex:none;}
   /* минимальная высота без флекса прижимала подпись к верху — центруем по обеим осям */
   .les .go, .link, .seg button, .chips button, .btn.small, .tnav .go, #app .btn,
   .viewer .vhead button, .modal .mbtns button, .tcbar button, .vnotes .nbtns button,
