@@ -1063,11 +1063,21 @@ function examStateText(st) {
   if (st.added) parts.push("добавленных: " + st.added);
   return "входит · " + (parts.join(", ") || "вопросов пока нет");
 }
+/* номер вводного блока — 0, и это настоящий номер: обычную проверку «если есть» он не проходит */
+const numOf = b => (b && (b.num === 0 || b.num)) ? b.num : "";
+const numPref = b => numOf(b) === "" ? "" : numOf(b) + ". ";
+/* номер = место среди видимых блоков; вводный считается нулевым */
+function matNum(d) {
+  const zeroOn = isOn((d.blocks[0] || {}).zero);
+  let k = zeroOn ? -1 : 0; d.blocks.forEach(b => b.num = truthy(b.active) ? ++k : "");
+}
+function matSort(d) {
+  d.blocks = (d.blocks || []).slice().sort((a, b) => (Number(a.order) || Number(a.n)) - (Number(b.order) || Number(b.n)) || a.n - b.n);
+  matNum(d);
+}
 async function matData() {
   const d = await api("admin.materials");
-  d.blocks = (d.blocks || []).slice().sort((a, b) => (Number(a.order) || Number(a.n)) - (Number(b.order) || Number(b.n)) || a.n - b.n);
-  const zeroOn = isOn((d.blocks[0] || {}).zero);                        /* первый блок помечен как вводный — он «0» */
-  let k = zeroOn ? -1 : 0; d.blocks.forEach(b => b.num = truthy(b.active) ? ++k : "");   /* номер = место среди видимых блоков */
+  matSort(d);
   d.subs = (d.subs || []).slice().sort((a, b) => (a.block - b.block) || (a.order - b.order));
   d.lessons = (d.lessons || []).slice().sort((a, b) => (a.block - b.block) || (a.order - b.order));
   return d;
@@ -1094,7 +1104,7 @@ async function delMaterial(kind, row, d) {
   const subs = kind === "block" ? d.subs.filter(x => Number(x.block) === Number(row.n)) : [];
   const mayDel = canDelMat(row) && !ls.some(l => !canDelMat(l)) && !subs.some(x => !canDelMat(x));
   const shown = truthy(row.active);
-  const what = kind === "block" ? `блок «${esc((row.num ? row.num + ". " : "") + row.title)}»` : kind === "sub" ? `тему «${esc(row.title)}»` : `материал «${esc(row.title)}»`;
+  const what = kind === "block" ? `блок «${esc(numPref(row) + row.title)}»` : kind === "sub" ? `тему «${esc(row.title)}»` : `материал «${esc(row.title)}»`;
   const inside = [subs.length ? plural(subs.length, "тема", "темы", "тем") : "", ls.length ? plural(ls.length, "материал", "материала", "материалов") : ""].filter(Boolean).join(" и ");
   if (!mayDel && !shown) return toast(kind === "block" ? "В блоке есть материалы, которые добавили не вы — удалить его может разработчик" : "Удалить это может разработчик");
   const v = await choose({ title: mayDel ? "Удалить или спрятать?" : "Спрятать?",
@@ -1156,6 +1166,7 @@ async function admMaterials(local) {                 /* local — своя ко�
     if (local) {                                   /* свою копию тоже пересортируем: порядок мог поменяться */
       d.lessons = d.lessons.slice().sort((a, b) => (a.block - b.block) || (Number(a.order) - Number(b.order)));
       d.subs = d.subs.slice().sort((a, b) => (a.block - b.block) || (Number(a.order) - Number(b.order)));
+      matSort(d);
     }
   } catch (e) { return fail(e); }
   const box = $("#ltbl"); box.innerHTML = "";
@@ -1197,7 +1208,7 @@ async function admMaterials(local) {                 /* local — своя ко�
     const blockLessons = d.lessons.filter(l => Number(l.block) === Number(b.n) && truthy(l.active));
     const groups = (loose.length || !subs.length ? [{ s: null, ls: loose }] : [])
       .concat(subs.map(s => ({ s: s, ls: d.lessons.filter(l => Number(l.block) === Number(b.n) && String(l.sub) === String(s.id)) })));
-    const hb = el("div", "mhead", `<h3>${b.num ? b.num + ". " : ""}${esc(b.title)}${bShown ? "" : ' <span class="tag">скрыт от сотрудников</span>'}</h3>`);
+    const hb = el("div", "mhead", `<h3>${numPref(b)}${esc(b.title)}${bShown ? "" : ' <span class="tag">скрыт от сотрудников</span>'}</h3>`);
     const bb = el("span", "mbtn");
     [[-1, "↑", "Поднять блок выше"], [1, "↓", "Опустить блок ниже"]].forEach(([dir, t, tip]) => {
       const mv = el("button", "mmove", t); mv.type = "button"; mv.title = tip;
@@ -1246,11 +1257,13 @@ async function admMaterials(local) {                 /* local — своя ко�
   $("#ladd").onclick = () => lessonForm(null, d);
   if (!firstLoad) window.scrollTo(0, y);
 }
+const ORD = { busy: 0, chain: Promise.resolve() };
+function ordSaving() { const x = document.getElementById("osave"); if (x) x.classList.toggle("on", ORD.busy > 0); }
 /* порядок блоков и тем: перетаскиваем мышью, номера пересчитываются сами.
    Блок можно сделать вводным — тогда он показывается как «0», а остальные считаются с единицы */
 function orderPanel(d) {
   const card = el("div", "card ordcard");
-  card.innerHTML = `<div class="qhead"><div><h3>Порядок блоков и тем</h3>
+  card.innerHTML = `<div class="qhead"><div><h3>Порядок блоков и тем <span class="osave" id="osave">сохраняем…</span></h3>
       <p class="lead">Тяните блок мышью — номера пересчитаются сами. Нажмите на блок, чтобы показать его темы: их тоже можно тянуть.
         «Вводный» — блок показывается сотрудникам как «0», остальные считаются с единицы.</p></div></div>
     <div class="ordlist" id="ordlist"></div>`;
@@ -1262,14 +1275,29 @@ function orderPanel(d) {
     num.textContent = zeroN !== null ? (i === 0 ? "0" : i) : i + 1;
     r.classList.toggle("iszero", !!zero);
   });
-  const saveBlocks = once(async () => {
-    try { await api("admin.blockOrder", { list: rowsOf().map(r => Number(r.dataset.n)) }); PR.program = null; EX.data = null;
-      toast("Порядок блоков сохранён"); await admMaterials(); } catch (e) { fail(e); }
-  });
-  const saveSubs = once(async (block, wrap) => {
-    try { await api("admin.subOrder", { block: block, list: [...wrap.querySelectorAll(".ordsub")].map(x => x.dataset.s) });
-      PR.program = null; toast("Порядок тем сохранён"); await admMaterials(); } catch (e) { fail(e); }
-  });
+  /* порядок меняем сразу на экране, а на сервер отправляем следом и по одному запросу за раз:
+     ждать ответа Google по несколько секунд после каждого перетаскивания незачем */
+  const send = (action, data) => {
+    ORD.busy++; ordSaving();
+    ORD.chain = ORD.chain.then(() => api(action, data))
+      .catch(e => { fail(e); admMaterials(); })               /* не сохранилось — покажем, как есть на сервере */
+      .then(() => { ORD.busy--; ordSaving(); });
+    return ORD.chain;
+  };
+  const redraw = () => { matSort(d); PR.program = null; EX.data = null; admMaterials(d); };
+  const saveBlocks = () => {
+    const list = rowsOf().map(r => Number(r.dataset.n));
+    d.blocks.sort((a, b) => list.indexOf(Number(a.n)) - list.indexOf(Number(b.n)));
+    d.blocks.forEach((b, i) => b.order = i + 1);
+    redraw(); send("admin.blockOrder", { list: list });
+  };
+  const saveSubs = (block, wrap) => {
+    const list = [...wrap.querySelectorAll(".ordsub")].map(x => x.dataset.s);
+    d.subs.filter(x => Number(x.block) === Number(block))
+      .sort((a, b) => list.indexOf(String(a.id)) - list.indexOf(String(b.id)))
+      .forEach((x, i) => x.order = i + 1);
+    redraw(); send("admin.subOrder", { block: block, list: list });
+  };
   /* перетаскивание: пока тянем — двигаем строку между соседями, на отпускании сохраняем порядок */
   const drag = (row, list, onDrop) => e => {
     if (e.target.closest("button")) return;
@@ -1297,10 +1325,14 @@ function orderPanel(d) {
     const subs = d.subs.filter(x => Number(x.block) === Number(b.n));
     r.querySelector(".osubs").textContent = subs.length ? plural(subs.length, "тема", "темы", "тем") : "";
     r.onpointerdown = drag(r, host, saveBlocks);
-    r.querySelector(".ozero").onclick = once(async () => {
-      try { await api("admin.blockZero", { n: b.n, on: Number(b.n) !== zeroN }); PR.program = null; EX.data = null;
-        toast(Number(b.n) !== zeroN ? "Блок стал вводным — теперь он «0»" : "Блок снова обычный"); await admMaterials(); } catch (e) { fail(e); }
-    });
+    r.querySelector(".ozero").onclick = () => {
+      const on = Number(b.n) !== zeroN;
+      d.blocks.forEach(x => x.zero = false);
+      if (on) { b.zero = true; d.blocks = [b].concat(d.blocks.filter(x => x !== b)); }   /* вводный всегда первый */
+      d.blocks.forEach((x, i) => x.order = i + 1);
+      toast(on ? "Блок стал вводным — теперь он «0»" : "Блок снова обычный");
+      redraw(); send("admin.blockZero", { n: b.n, on: on });
+    };
     host.appendChild(r);
     if (subs.length) {
       const wrap = el("div", "ordsubs"); wrap.hidden = true;
@@ -1317,6 +1349,7 @@ function orderPanel(d) {
     }
   });
   renum();
+  setTimeout(ordSaving, 0);
   return card;
 }
 function lessonForm(l, d) {
@@ -1362,7 +1395,7 @@ function lessonForm(l, d) {
   const subsOf = n => d.subs.filter(s => Number(s.block) === Number(n));
   const matesOf = () => d.lessons.filter(x => Number(x.block) === Number(S.block) && String(x.sub || "") === S.sub && (!l || x.id !== l.id));
   const fillBlocks = () => {
-    $$("#lblock").innerHTML = d.blocks.map(b => `<option value="${b.n}">${b.num ? b.num + ". " : "(скрыт) "}${esc(b.title)}</option>`).join("") + `<option value="__new">＋ Новый блок…</option>`;
+    $$("#lblock").innerHTML = d.blocks.map(b => `<option value="${b.n}">${numOf(b) === "" ? "(скрыт) " : numPref(b)}${esc(b.title)}</option>`).join("") + `<option value="__new">＋ Новый блок…</option>`;
     $$("#lblock").value = S.block;
   };
   const fillSubs = () => {
@@ -1390,7 +1423,7 @@ function lessonForm(l, d) {
     else if (S.after !== "end") { const i = mates.findIndex(x => x.id === S.after); if (i >= 0) pos = i + 1; }
     mates.splice(pos, 0, me);
     const b = d.blocks.filter(x => Number(x.n) === Number(S.block))[0], s = d.subs.filter(x => String(x.id) === S.sub)[0];
-    $$("#lprev").innerHTML = `<div class="pv-path">Блок ${b ? (b.num || "—") + " · " + esc(b.title) : "—"}${s ? " → " + esc(s.title) : ""}</div>
+    $$("#lprev").innerHTML = `<div class="pv-path">Блок ${b ? (numOf(b) === "" ? "—" : numOf(b)) + " · " + esc(b.title) : "—"}${s ? " → " + esc(s.title) : ""}</div>
       <div class="sub pv">${mates.map(x => {
         const ready = x.id === "__me" ? me.ready : truthy(x.ready), act = x.id === "__me" ? me.active : truthy(x.active);
         return `<div class="les${ready ? "" : " soon"}${x.id === "__me" ? " pv-me" : ""}${act ? "" : " pv-off"}">

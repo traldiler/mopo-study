@@ -44,10 +44,18 @@ async function api(action, data) {
     SWR[key] = { v: v, at: Date.now() };
     return JSON.parse(JSON.stringify(v));
   }
+  /* правки порядка меняют только список материалов: сбрасывать и перечитывать разом все списки кабинета незачем */
+  if (/^admin\.(blockOrder|subOrder|blockZero|blockMove)$/.test(action)) {
+    const r = await apiRaw(action, data);
+    Object.keys(SWR).forEach(k => { if (k.indexOf("admin.materials") === 0) delete SWR[k]; });
+    return r;
+  }
   if (/^admin\.|^question\./.test(action) && !/^admin\.(boot|retakes|retakeGet|retakeGenerate|prepare|prepStat|prepAutoStat|driveStatus|files|fileWho)$/.test(action)) {       /* что-то поменяли — списки перечитаем, когда сервер закончит */
     const r = await apiRaw(action, data);
     Object.keys(SWR).forEach(k => delete SWR[k]);
-    if (isStaff(APP.user)) setTimeout(() => adminPrefetch(true), 300);
+    /* перечитываем списки не сразу, а когда правки закончились: Google выполняет запросы одного человека по очереди,
+       и фоновое чтение всего кабинета после каждой правки заставляло ждать следующее нажатие */
+    if (isStaff(APP.user)) { clearTimeout(PREF.timer); PREF.timer = setTimeout(() => adminPrefetch(true), 2500); }
     return r;
   }
   return apiRaw(action, data);
@@ -134,7 +142,7 @@ function applyBoot(b) {
   if (isStaff(APP.user)) adminPrefetch();
 }
 /* РОП и разработчик: все списки кабинета одним запросом в фоне — вкладки потом открываются мгновенно */
-const PREF = { at: 0, busy: false };
+const PREF = { at: 0, busy: false, timer: 0 };
 async function adminPrefetch(force) {
   if (APP.demo || PREF.busy || (!force && Date.now() - PREF.at < 60000)) return;
   PREF.busy = true;
@@ -538,7 +546,9 @@ async function loadCabinet(force) {
 /* номер блока на экране = его место в программе (порядок меняют в «Материалах»); n — постоянный код блока */
 function blockNum(n) {
   const bs = (PR.program && PR.program.blocks) || [], i = bs.findIndex(b => Number(b.n) === Number(n));
-  return i >= 0 ? (bs[i].num || i + 1) : n;
+  if (i < 0) return n;
+  const v = bs[i].num;                                    /* у вводного блока номер 0 — это настоящий номер, а не «пусто» */
+  return v === 0 || v ? v : i + 1;
 }
 const subQuizzes = b => [b.quiz].concat(b.subs.map(s => s.quiz)).filter(Boolean);
 /* материалы с пометкой «скоро» ещё не загружены — в прохождении их не считаем, пока не появятся */
@@ -674,7 +684,7 @@ function openBlock(n, focusLesson, subIndex) {
     <div class="crumbs"><button class="link" id="back" type="button">← Все блоки</button></div>
     <section class="bhero">
       <div class="bc-ico big">${blockIcon(n)}</div>
-      <div><div class="bc-num">Блок ${n}${st.ready ? " · пройден" : ""}</div>
+      <div><div class="bc-num">Блок ${blockNum(n)}${st.ready ? " · пройден" : ""}</div>
         <h2>${esc(b.title)}</h2>${b.intro ? `<p class="lead">${esc(b.intro)}</p>` : ""}</div>
     </section>
     <div class="res">
