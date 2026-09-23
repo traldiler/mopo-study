@@ -20,6 +20,7 @@ function swrRedraw() {
   else screenAdmin();
   setTimeout(() => window.scrollTo(0, y), 30);
 }
+const copy_ = v => (v === undefined || v === null) ? v : JSON.parse(JSON.stringify(v));
 async function api(action, data) {
   if (APP.demo) {                                  /* демо отвечает как сервер: отказ — ошибка, а не «успех» */
     const r = await demoApi(action, data);
@@ -33,16 +34,18 @@ async function api(action, data) {
       if (Date.now() - c.at > 15000 && !c.busy) {
         c.busy = true;
         apiRaw(action, data).then(v => {
+          if (v === undefined || v === null) { c.busy = false; return; }
           const changed = JSON.stringify(v) !== JSON.stringify(c.v);
           SWR[key] = { v: v, at: Date.now() };
           if (changed) swrRedraw();
         }).catch(() => { c.busy = false; });
       }
-      return JSON.parse(JSON.stringify(c.v));
+      if (c.v !== undefined && c.v !== null) return copy_(c.v);
+      delete SWR[key];                             /* в кэше пусто — значит ответ был неполным: спросим сервер заново */
     }
     const v = await apiRaw(action, data);
-    SWR[key] = { v: v, at: Date.now() };
-    return JSON.parse(JSON.stringify(v));
+    if (v !== undefined && v !== null) SWR[key] = { v: v, at: Date.now() };
+    return copy_(v);
   }
   /* правки порядка меняют только список материалов: сбрасывать и перечитывать разом все списки кабинета незачем */
   if (/^admin\.(blockOrder|subOrder|blockZero|blockMove)$/.test(action)) {
@@ -82,13 +85,16 @@ async function apiRaw(action, data) {
         const t = (txt.match(/<title>([^<]*)/i) || [])[1] || txt.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").slice(0, 120);
         throw new Error("bad:" + r.status + " " + t);
       }
+      /* Google иногда отвечает на запрос приветственной страницей скрипта (в ней есть service и нет данных) —
+         это не ответ на действие, а признак, что запрос до скрипта не дошёл: спрашиваем заново */
+      if (j && j.ok === true && j.service && action !== 'ping') throw new Error("bad:200 ответ не от кабинета");
       if (cut) clearTimeout(cut);
       break;
     } catch (e) {
       if (cut) clearTimeout(cut);
       j = null;
       const bad = /^bad:/.test(e.message || ""), slow = e && e.name === "AbortError";
-      const again = safe || (bad && /^bad:404/.test(e.message));
+      const again = safe || (bad && /^bad:(404|200 ответ)/.test(e.message));   /* 404 и «ответ не от кабинета» — запрос до скрипта не дошёл, повторить не страшно */
       if (tryN === tries - 1 || !again) throw new Error(slow ? "Google долго не отвечает — попробуйте ещё раз через минуту"
         : bad ? "Сбой сервера Google (" + e.message.slice(4).trim() + "). Попробуйте ещё раз" : "Сервер не ответил — проверьте интернет и попробуйте ещё раз");
       await new Promise(res => setTimeout(res, 1000 * (tryN + 1)));
@@ -148,7 +154,8 @@ async function adminPrefetch(force) {
   PREF.busy = true;
   try {
     const a = await apiRaw("admin.boot"), now = Date.now();
-    const put = (action, data, v) => { SWR[action + JSON.stringify(data || {})] = { v: v, at: now }; };
+    if (!a || !a.materials || !a.examList) { PREF.busy = false; return; }   /* ответ неполный — ничего не запоминаем, вкладки спросят сами */
+    const put = (action, data, v) => { if (v !== undefined && v !== null) SWR[action + JSON.stringify(data || {})] = { v: v, at: now }; };
     put("admin.students", null, { students: a.students });
     put("admin.attempts", null, { attempts: a.attempts });
     put("admin.users", null, { users: a.users });

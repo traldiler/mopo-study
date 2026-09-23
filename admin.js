@@ -1168,7 +1168,14 @@ async function admMaterials(local) {                 /* local — своя ко�
       d.subs = d.subs.slice().sort((a, b) => (a.block - b.block) || (Number(a.order) - Number(b.order)));
       matSort(d);
     }
-  } catch (e) { return fail(e); }
+  } catch (e) {                                  /* не загрузилось — не оставляем вкладку на «Загружаем…» */
+    fail(e);
+    const b = $("#ltbl");
+    if (b) { b.innerHTML = `<p class="hint">Не удалось загрузить материалы: ${esc(e.message || "сервер не ответил")}</p>
+      <button class="btn small white" id="lretry" type="button">Попробовать ещё раз</button>`;
+      $("#lretry").onclick = once(async () => { b.innerHTML = '<p class="hint">Загружаем…</p>'; await admMaterials(); }); }
+    return;
+  }
   const box = $("#ltbl"); box.innerHTML = "";
   box.appendChild(orderPanel(d));                   /* порядок блоков и тем — перетаскиванием, сразу наверху вкладки */
   const quizInfo = id => { const q = QZ.data && QZ.data.quizzes[id]; return q ? plural(q.questions.length, "вопрос", "вопроса", "вопросов") + " · порог " + q.pass : "мини-тест"; };
