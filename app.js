@@ -1066,30 +1066,45 @@ function pdfScroll(toc, tabs, note) {
     fixTop(); window.addEventListener("resize",fixTop);
     var htmlbox=document.getElementById("htmlbox");
     function showPdf(){ htmlbox.style.display="none"; wrap.style.display=""; document.body.classList.remove("sheet"); }
-    /* ширины столбцов из живой таблицы: в копии они те, что были при сборке, а их могли поменять */
-    function applyCols(cols){
-      if(!cols||!cols.length) return;
-      var t=htmlbox.querySelector("table"); if(!t) return;
-      var cg=t.querySelector("colgroup");
+    /* ширину столбцов задаём сами по названию столбца: в копии записаны ширины на момент сборки,
+       и в узких столбцах текст рассыпается по одной букве, растягивая строку на пол-экрана */
+    function fitCols(){
+      var t=htmlbox.querySelector("table"); if(!t||!t.rows.length) return;
+      var head=t.rows[0].cells, cg=t.querySelector("colgroup");
       if(!cg){ cg=document.createElement("colgroup"); t.insertBefore(cg,t.firstChild); }
-      var cs=cg.querySelectorAll("col"), n=Math.max(cs.length,cols.length), total=0;
-      for(var i=0;i<n;i++){
-        var c=cs[i];
-        if(!c){ c=document.createElement("col"); cg.appendChild(c); }
-        var w=Number(cols[i])||parseInt(c.style.width,10)||100;
+      var cs=cg.querySelectorAll("col"), total=0;
+      for(var i=0;i<head.length;i++){
+        var c=cs[i]; if(!c){ c=document.createElement("col"); cg.appendChild(c); }
+        var n=String(head[i].textContent||"").toLowerCase(), has=function(x){ return n.indexOf(x)>=0; }, w=110;
+        if(!n.trim()){                                                  /* шапки нет — смотрим, что в самих ячейках */
+          var mx=0;
+          for(var r=1;r<t.rows.length&&r<25;r++){ var cell=t.rows[r].cells[i]; if(cell) mx=Math.max(mx,String(cell.textContent||"").trim().length); }
+          w = mx<=2 ? 40 : mx<=12 ? 90 : mx<=25 ? 150 : 200;
+        }
+        else if(has("наименован")) w=360;
+        else if(has("шильдик")||has("доп. фото")||has("доп фото")) w=150;
+        else if(has("фото")&&!has("есть")) w=150;
+        else if(has("комплектац")||has("срок производ")||has("лог инфо")) w=300;
+        else if(has("производител")||has("марка")) w=130;
+        else if(has("цена")) w=120;
+        else if(has("дата")) w=95;
+        else if(has("заявк")||has("контракт")) w=120;
+        else if(has("заводск")||has("номер")) w=70;
+        else if(n.trim().indexOf("есть")===0||has("есить")) w=80;
+        else if(has("ссылк")||has("http")||has("опубликован")||has("авито")||has("трейд")||has("видео")||has("сайт")) w=170;
         c.style.width=w+"px"; total+=w;
       }
       t.style.width=total+"px";
     }
-    function showHtml(html,cols){                          /* лист, который Google не печатает, кабинет собирает сам */
+    function showHtml(html){                              /* лист, который Google не печатает, кабинет собирает сам */
       wrap.style.display="none"; htmlbox.style.display="block"; htmlbox.innerHTML=html;
-      applyCols(cols);
+      fitCols();
       document.body.classList.add("sheet");
       busyTab=false; pages=[];
       document.getElementById("num").textContent="";      /* страниц у собранного листа нет */
       sc.scrollTop=0; sc.scrollLeft=0;
       var t=htmlbox.querySelector("table");
-      if(t){ z=Math.min(1,Math.max(.35,(sc.clientWidth-40)/t.scrollWidth)); }   /* сразу по ширине окна */
+      if(t){ z=Math.min(1,Math.max(.6,(sc.clientWidth-40)/t.scrollWidth)); }    /* по ширине окна, но не мельче 60%: иначе текст не прочитать. Всю таблицу целиком — кнопкой «По ширине» */
       zoomHtml();
       if(PEND) setTimeout(runPend,120);
     }
@@ -1366,7 +1381,7 @@ function pdfScroll(toc, tabs, note) {
     window.addEventListener("message",function(e){
       var d=e.data||{};
       if(d.mopoPdf){ if(d.i!=null&&d.i!==curTab) return; if(d.part!=null&&d.part!==curPart) return; showPdf(); boot(new Uint8Array(d.mopoPdf)); }
-      if(d.mopoHtml!=null){ if(d.i!=null&&d.i!==curTab) return; showHtml(d.mopoHtml,d.cols); }
+      if(d.mopoHtml!=null){ if(d.i!=null&&d.i!==curTab) return; showHtml(d.mopoHtml); }
       if(d.mopoErr&&(d.i==null||d.i===curTab)){ busyTab=false; if(PEND){ PEND=null; parent.postMessage({mopo:"notfound"},"*"); } wait("Не удалось открыть: "+d.mopoErr+"<br><br>Нажмите вкладку ещё раз."); }
     });
     var tsel=document.getElementById("tsel"), tnum=document.getElementById("tnum");
@@ -1413,7 +1428,7 @@ function renderDoc(frame, r, ref) {
       try {
         let c = await docCacheGet(ck);
         if (!c || (!c.pdf && c.html == null)) { try { c = await fetchOne(); } catch (e1) { c = await fetchOne(); } }   /* вторая попытка: первая часто упирается в таймаут Google */
-        if (c.html != null) { send({ mopoHtml: c.html, i: i, cols: c.cols || null }); return; }
+        if (c.html != null) { send({ mopoHtml: c.html, i: i }); return; }
         const buf = b64bytes(c.pdf).buffer;
         send({ mopoPdf: buf, i: i, part: part }, [buf]);
       } catch (err) { send({ mopoErr: String(err.message || err), i: i, part: part }); }
