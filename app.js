@@ -1066,8 +1066,24 @@ function pdfScroll(toc, tabs, note) {
     fixTop(); window.addEventListener("resize",fixTop);
     var htmlbox=document.getElementById("htmlbox");
     function showPdf(){ htmlbox.style.display="none"; wrap.style.display=""; document.body.classList.remove("sheet"); }
-    function showHtml(html){                              /* лист, который Google не печатает, кабинет собирает сам */
+    /* ширины столбцов из живой таблицы: в копии они те, что были при сборке, а их могли поменять */
+    function applyCols(cols){
+      if(!cols||!cols.length) return;
+      var t=htmlbox.querySelector("table"); if(!t) return;
+      var cg=t.querySelector("colgroup");
+      if(!cg){ cg=document.createElement("colgroup"); t.insertBefore(cg,t.firstChild); }
+      var cs=cg.querySelectorAll("col"), n=Math.max(cs.length,cols.length), total=0;
+      for(var i=0;i<n;i++){
+        var c=cs[i];
+        if(!c){ c=document.createElement("col"); cg.appendChild(c); }
+        var w=Number(cols[i])||parseInt(c.style.width,10)||100;
+        c.style.width=w+"px"; total+=w;
+      }
+      t.style.width=total+"px";
+    }
+    function showHtml(html,cols){                          /* лист, который Google не печатает, кабинет собирает сам */
       wrap.style.display="none"; htmlbox.style.display="block"; htmlbox.innerHTML=html;
+      applyCols(cols);
       document.body.classList.add("sheet");
       busyTab=false; pages=[];
       document.getElementById("num").textContent="";      /* страниц у собранного листа нет */
@@ -1350,7 +1366,7 @@ function pdfScroll(toc, tabs, note) {
     window.addEventListener("message",function(e){
       var d=e.data||{};
       if(d.mopoPdf){ if(d.i!=null&&d.i!==curTab) return; if(d.part!=null&&d.part!==curPart) return; showPdf(); boot(new Uint8Array(d.mopoPdf)); }
-      if(d.mopoHtml!=null){ if(d.i!=null&&d.i!==curTab) return; showHtml(d.mopoHtml); }
+      if(d.mopoHtml!=null){ if(d.i!=null&&d.i!==curTab) return; showHtml(d.mopoHtml,d.cols); }
       if(d.mopoErr&&(d.i==null||d.i===curTab)){ busyTab=false; if(PEND){ PEND=null; parent.postMessage({mopo:"notfound"},"*"); } wait("Не удалось открыть: "+d.mopoErr+"<br><br>Нажмите вкладку ещё раз."); }
     });
     var tsel=document.getElementById("tsel"), tnum=document.getElementById("tnum");
@@ -1397,7 +1413,7 @@ function renderDoc(frame, r, ref) {
       try {
         let c = await docCacheGet(ck);
         if (!c || (!c.pdf && c.html == null)) { try { c = await fetchOne(); } catch (e1) { c = await fetchOne(); } }   /* вторая попытка: первая часто упирается в таймаут Google */
-        if (c.html != null) { send({ mopoHtml: c.html, i: i }); return; }
+        if (c.html != null) { send({ mopoHtml: c.html, i: i, cols: c.cols || null }); return; }
         const buf = b64bytes(c.pdf).buffer;
         send({ mopoPdf: buf, i: i, part: part }, [buf]);
       } catch (err) { send({ mopoErr: String(err.message || err), i: i, part: part }); }
