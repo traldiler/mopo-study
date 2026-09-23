@@ -1035,6 +1035,7 @@ function pdfScroll(toc, tabs, note) {
   .textLayer ::selection{background:rgba(230,96,35,.35)}
   .lk{position:absolute;z-index:2;cursor:pointer} .lk:hover{background:rgba(230,96,35,.12)}
   .mk{position:absolute;z-index:0;border-radius:3px;opacity:.55;pointer-events:none}
+  .mk.nt{background:none!important;border-bottom:2px solid #C28A1C;border-radius:0;opacity:1}
   #selbar{position:fixed;z-index:9;display:none;gap:6px;align-items:center;background:#232227;color:#fff;border-radius:999px;padding:6px 8px;box-shadow:0 8px 20px rgba(0,0,0,.25)}
   #selbar.on{display:flex}
   #selbar button{background:rgba(255,255,255,.14);border:0;color:#fff;border-radius:999px;padding:5px 10px;font:600 12px Arial;cursor:pointer}
@@ -1278,8 +1279,8 @@ function pdfScroll(toc, tabs, note) {
             var rg=document.createRange(); rg.setStart(a.n,a.o); rg.setEnd(b.n,b.o+1);
             [].slice.call(rg.getClientRects()).forEach(function(r){
               if(r.width<1||r.height<1) return;
-              var d=document.createElement("div"); d.className="mk"; d.dataset.q=q;
-              d.style.background=COLORS[m.color||1]||COLORS[1];
+              var d=document.createElement("div"); d.className="mk"+(m.color?"":" nt"); d.dataset.q=q;   /* заметка без цвета — оранжевое подчёркивание, как в документах */
+              if(m.color) d.style.background=COLORS[m.color]||COLORS[1];
               d.style.left=(r.left-hb.left)/k+"px"; d.style.top=(r.top-hb.top)/k+"px";
               d.style.width=r.width/k+"px"; d.style.height=r.height/k+"px"; host.appendChild(d); found.push(d);
             });

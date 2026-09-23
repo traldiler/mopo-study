@@ -1,6 +1,6 @@
 /* Кэш оболочки: кабинет открывается быстро и переживает короткие обрывы связи.
    Данные (ответы, результаты) через кэш не идут — только сеть. */
-const CACHE = "mopo-v121";
+const CACHE = "mopo-v122";
 /* материалы и вопросы приходят с сервера по входу — в кэш оболочки не кладём */
 const SHELL = ["./", "index.html", "styles.css", "app.js", "exam.js", "admin.js", "config.js", "img/logo-light.png"];
 self.addEventListener("install", e => {
