@@ -72,7 +72,9 @@ async function apiRaw(action, data) {
      Документ и таблица приходят копией в несколько мегабайт: качаются они дольше, и обрывать их через 25 секунд нельзя —
      кабинет начинал скачивание заново по кругу, и вместо одной минуты ожидание растягивалось на три */
   const тяжёлый = /^doc\.(get|sheet)$/.test(action);
-  const tries = тяжёлый ? 2 : safe ? 5 : 3;
+  /* повторов у тяжёлых не меньше, чем у остальных: Google-прокладка теряет большой ответ (404), но работа сервера
+     не пропадает — копия остаётся у него в памяти, и следующая попытка отвечает сразу */
+  const tries = тяжёлый ? 4 : safe ? 5 : 3;
   for (let tryN = 0; tryN < tries; tryN++) {
     const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
     const cut = ctl && safe ? setTimeout(() => ctl.abort(), тяжёлый ? 180000 : 25000) : null;
