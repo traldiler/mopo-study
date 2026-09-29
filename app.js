@@ -832,11 +832,11 @@ function lessonRow(l) {
   row.innerHTML = `<div class="ic">${KIND[l.kind] || "•"}</div>
     <div class="t">${esc(l.title)}<small>${esc(l.kind)}${l.note ? " · " + esc(l.note) : ""}${notes.length ? " · " + plural(notes.length, "заметка", "заметки", "заметок") : ""}${hls ? " · " + plural(hls, "выделение", "выделения", "выделений") : ""}</small></div>`;
   if (l.ready) {
-    const ext = l.kind === "сайт" && NOFRAME.test(String(l.url));           /* такой сайт показывается только отдельной вкладкой */
+    const ext = outsideOnly(l);                                            /* показывается только отдельной вкладкой */
     const open = el("button", "go"); open.type = "button"; open.onclick = () => openLesson(l);
     /* на телефоне длинная надпись сталкивала кружок отметки на вторую строку — там оставляем «Открыть ↗» */
     open.innerHTML = ext ? 'Открыть<span class="wo"> в новой вкладке</span> ↗' : "Открыть";
-    if (ext) open.title = "Этот сайт не разрешает показывать себя внутри кабинета";
+    if (ext) open.title = "Эта страница не разрешает показывать себя внутри кабинета";
     const note = el("button", "go quiet", notes.length ? "Заметки" : "Заметка"); note.type = "button"; note.onclick = () => notesFor(l);
     const star = el("button", "star" + (marked ? " on" : ""), marked ? "★" : "☆"); star.type = "button";
     star.title = marked ? "Убрать из закладок" : "В закладки";
@@ -887,6 +887,14 @@ function driveEmbed(url) {
 }
 const NOFRAME = /(^|\/\/)(www\.)?prom-import\.com/i;   /* сайт Пром-Импорта пока запрещает встраивание (X-Frame-Options) */
 function isInternal(u) { return /^(konspekt|shemy|praktika)\//.test(String(u)); }
+const YT_ = /(^|\/\/|\.)(youtube\.com|youtu\.be)/i;
+/* страницы, которые внутри кабинета не показать: сайты с запретом встраивания
+   и всё на YouTube, кроме самих роликов (канал, плейлист, страница автора) — они открываются отдельной вкладкой */
+function outsideOnly(l) {
+  const u = String((l && l.url) || "");
+  if (!u || (l && l.html) || isInternal(u)) return false;
+  return NOFRAME.test(u) || (YT_.test(u) && driveEmbed(u) === u);
+}
 /* маркеры для выделений: 5 цветов, одинаковые в кабинете и в конспекте */
 const MARKERS = [null, { n: "жёлтый", c: "#FFE070" }, { n: "зелёный", c: "#8EDDA4" }, { n: "голубой", c: "#9CC4FF" },
                  { n: "розовый", c: "#FFA9C9" }, { n: "оранжевый", c: "#FFBE7D" }];
@@ -1641,10 +1649,10 @@ function openLesson(l, at, quote) {
   }
   /* сайты, которые запрещают показывать себя внутри чужих страниц, — сразу отдельной вкладкой.
      Авито и Дром разрешают — они открываются внутри, с заметками сбоку и кнопкой «в новой вкладке» */
-  if (l.kind === "сайт" && NOFRAME.test(String(l.url))) {
+  if (outsideOnly(l)) {
     LOC.l = null;
     const w = window.open(l.url, "_blank");
-    if (w) { try { w.opener = null; } catch (e) { } toast("Сайт открыт в новой вкладке"); }
+    if (w) { try { w.opener = null; } catch (e) { } toast("Открыли в новой вкладке"); }
     else toast("Браузер не дал открыть вкладку — разрешите всплывающие окна для этого сайта");
     return;
   }
@@ -1656,10 +1664,13 @@ function openLesson(l, at, quote) {
   const slides = /docs\.google\.com\/presentation\//.test(String(l.url));
   const src = inner ? l.url : driveEmbed(l.url);
   const ytFrame = /youtube\.com\/embed\//.test(src);      /* плееру YouTube нужен адрес страницы, иначе он отвечает «ошибка 153» */
+  /* кнопка «в новой вкладке» нужна только чужим страницам — сайту или маркетплейсу.
+     Наши видео, документы, таблицы и конспекты открываются внутри, и ссылка наружу там только мешает */
+  const сайтВнутри = !framed && (l.kind === "сайт" || l.kind === "ссылка");
   let tab = quote && notesOf(l.id).some(n => isHl(n) && n.quote === quote) ? "hl" : "note";
   v.innerHTML = `<div class="vhead"><b>${esc(l.title)}</b>
       <button type="button" data-a="docback" class="back" hidden></button>
-      ${framed ? "" : '<button type="button" data-a="newtab" class="quiet">Открыть в новой вкладке ↗</button>'}
+      ${сайтВнутри ? '<button type="button" data-a="newtab" class="quiet">Открыть в новой вкладке ↗</button>' : ""}
       ${узкийЭкран && (video || framed) ? '<button type="button" data-a="big">⤢ Развернуть</button>' : ""}
       <button type="button" data-a="notes" class="${узкийЭкран ? "" : "on "}first">Заметки</button>
       ${own ? "" : `<button type="button" data-a="ask">${узкийЭкран ? "Вопрос" : (isStaff(APP.user) && staffMode() !== "mopo" ? "Вопрос разработчику" : "Спросить РОПа")}</button>
