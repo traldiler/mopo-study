@@ -68,11 +68,14 @@ async function apiRaw(action, data) {
   const safe = /^(boot|program|progress\.get|me|my\.questions|mat\.key|quiz\.overrides|exam\.extra|quiz\.review|doc\.get|doc\.sheet|my\.exams|my\.report|retake\.start|admin\.(retakes|retakeGet|users|students|attempts|attempt|questions|badges|materials|resets|examList|examGet|quizGet))$/.test(action);
   let j = null;
   /* Google передаёт ответ скрипта через второй свой сервер, и тот иногда зависает или теряет ответ (404), хотя скрипт уже всё сделал.
-     Чтение повторяем до 5 раз с растущей паузой и обрываем зависший запрос через 25 с; запись повторяем только при 404, как раньше */
-  const tries = safe ? 5 : 3;
+     Чтение повторяем до 5 раз с растущей паузой и обрываем зависший запрос; запись повторяем только при 404, как раньше.
+     Документ и таблица приходят копией в несколько мегабайт: качаются они дольше, и обрывать их через 25 секунд нельзя —
+     кабинет начинал скачивание заново по кругу, и вместо одной минуты ожидание растягивалось на три */
+  const тяжёлый = /^doc\.(get|sheet)$/.test(action);
+  const tries = тяжёлый ? 2 : safe ? 5 : 3;
   for (let tryN = 0; tryN < tries; tryN++) {
     const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
-    const cut = ctl && safe ? setTimeout(() => ctl.abort(), 25000) : null;
+    const cut = ctl && safe ? setTimeout(() => ctl.abort(), тяжёлый ? 180000 : 25000) : null;
     try {
       const r = await fetch(window.API_URL, {
         method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
