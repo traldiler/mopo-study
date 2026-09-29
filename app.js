@@ -724,7 +724,22 @@ function openBlock(n, focusLesson, subIndex) {
     if (sub.title) sec.innerHTML = `<div class="subhead"><h3>${esc(sub.title)}</h3>
       <span>${dn} / ${readyOf(sub.lessons).length}${sub.quiz ? (q && q.passed ? " · тест сдан" : q && q.retake ? " · тест обновлён" : " · тест не сдан") : ""}</span>
       <div class="hbar small"><i style="width:${pct(dn, readyOf(sub.lessons).length)}%"></i></div></div>`;
-    sub.lessons.forEach(l => sec.appendChild(lessonRow(l)));
+    /* третий уровень: материалы с одинаковой пометкой собираются в подборку внутри темы («Видео с YouTube») */
+    let gname = null, gbox = null;
+    sub.lessons.forEach(l => {
+      const g = String(l.group || "");
+      if (g !== gname) {
+        gname = g; gbox = null;
+        if (g) {
+          gbox = el("div", "lgroup");
+          const done = sub.lessons.filter(x => String(x.group || "") === g && PR.progress.lessons[x.id]).length;
+          const all = sub.lessons.filter(x => String(x.group || "") === g && x.ready !== false).length;
+          gbox.innerHTML = `<div class="lghead"><h4>${esc(g)}</h4><span>${done} / ${all}</span></div>`;
+          sec.appendChild(gbox);
+        }
+      }
+      (gbox || sec).appendChild(lessonRow(l));
+    });
     if (sub.quiz) sec.appendChild(quizRow(sub.quiz, "Мини-тест: " + (sub.title || b.title)));
     host.appendChild(sec);
   };
@@ -860,6 +875,9 @@ function mmss(sec) {
   return Math.floor(sec / 60) + ":" + String(sec % 60).padStart(2, "0");
 }
 function driveEmbed(url) {
+  /* YouTube не разрешает показывать обычную ссылку внутри страницы — подменяем её на плеер */
+  const y = String(url).match(/(?:youtube\.com\/(?:watch\?(?:.*&)?v=|shorts\/|embed\/)|youtu\.be\/)([A-Za-z0-9_-]{6,})/);
+  if (y) return "https://www.youtube.com/embed/" + y[1] + "?rel=0";
   const m = String(url).match(/drive\.google\.com\/file\/d\/([^/]+)/);
   if (m) return "https://drive.google.com/file/d/" + m[1] + "/preview";
   const d = String(url).match(/docs\.google\.com\/(document|presentation|spreadsheets)\/d\/([^/]+)/);
@@ -1637,6 +1655,7 @@ function openLesson(l, at, quote) {
   const textual = own || /^konspekt\//.test(String(l.url)) || gk === "doc" || gk === "sheet";   /* маркер и цитаты: конспекты, документы и таблицы */
   const slides = /docs\.google\.com\/presentation\//.test(String(l.url));
   const src = inner ? l.url : driveEmbed(l.url);
+  const ytFrame = /youtube\.com\/embed\//.test(src);      /* плееру YouTube нужен адрес страницы, иначе он отвечает «ошибка 153» */
   let tab = quote && notesOf(l.id).some(n => isHl(n) && n.quote === quote) ? "hl" : "note";
   v.innerHTML = `<div class="vhead"><b>${esc(l.title)}</b>
       <button type="button" data-a="docback" class="back" hidden></button>
@@ -1647,7 +1666,7 @@ function openLesson(l, at, quote) {
       <button type="button" data-a="bm" class="bm"></button>`}
       <button type="button" data-a="close">Закрыть</button></div>
     <div class="vbody">
-      <iframe ${framed ? "" : `src="${esc(src)}"`} allow="autoplay; fullscreen" allowfullscreen webkitallowfullscreen ${framed ? "" : 'referrerpolicy="no-referrer"'}></iframe>
+      <iframe ${framed ? "" : `src="${esc(src)}"`} allow="autoplay; fullscreen" allowfullscreen webkitallowfullscreen ${framed || ytFrame ? "" : 'referrerpolicy="no-referrer"'}></iframe>
       <aside class="vnotes">
         ${textual ? `<div class="seg"><button type="button" data-tab="note">Заметки <i></i></button><button type="button" data-tab="hl">Выделения <i></i></button></div>`
                   : "<h4>Заметки к материалу</h4>"}
@@ -2731,7 +2750,7 @@ async function demoMat() {
       const sid = sb.title ? "s" + b.n + ":" + sb.title : "";
       if (sb.title) mat.subs.push({ id: sid, block: b.n, title: sb.title, order: si + 1, quiz: sb.quiz || "", active: true });
       sb.lessons.forEach((l, li) => mat.lessons.push({ id: l.id, block: b.n, sub: sid, order: (li + 1) * 10, title: l.title, kind: l.kind,
-        url: l.url, note: l.note || "", ready: l.ready !== false, active: true }));
+        url: l.url, note: l.note || "", group: l.group || "", ready: l.ready !== false, active: true }));
     });
   });
   (DEMO.matOps || []).forEach(op => { try { demoApply(mat, op); } catch (e) { /* правка к исчезнувшему материалу — пропускаем */ } });
@@ -2769,7 +2788,7 @@ function demoApply(m, op) {
     : m.lessons.filter(x => x.id === d.id)).forEach(x => x.active = d.active);
   if (op.t === "lesson") {
     const patch = { block: Number(d.block), sub: d.sub || "", title: d.title, kind: d.kind, url: d.url || "", note: d.note || "",
-                    ready: d.ready !== false, active: d.active !== false };
+                    group: String(d.group || ""), ready: d.ready !== false, active: d.active !== false };
     let me = m.lessons.filter(l => l.id === d.id)[0];
     const existed = !!me;
     if (me) Object.assign(me, patch); else { me = Object.assign({ id: d.id, order: 99999, createdBy: d.createdBy || "" }, patch); m.lessons.push(me); }
@@ -2807,7 +2826,7 @@ async function demoProgram() {
     blocks: m.blocks.filter(b => b.active !== false).sort((a, b) => a.order - b.order).map((b, bi) => {
       const subs = m.subs.filter(x => x.block == b.n && x.active !== false).sort((a, c) => a.order - c.order);
       const les = m.lessons.filter(l => l.block == b.n && l.active !== false).sort((a, c) => a.order - c.order)
-        .map(l => ({ id: l.id, title: l.title, kind: l.kind, url: l.url, note: l.note, ready: l.ready !== false, sub: l.sub }));
+        .map(l => ({ id: l.id, title: l.title, kind: l.kind, url: l.url, note: l.note, ready: l.ready !== false, sub: l.sub, group: l.group || "" }));
       const list = [{ title: "", quiz: "", lessons: les.filter(l => !l.sub) }]           /* без темы — перед темами */
         .concat(subs.map(x => ({ title: x.title, quiz: x.quiz || "", lessons: les.filter(l => l.sub === x.id) })));
       return { n: b.n, num: bi + (zeroOn ? 0 : 1), title: b.title, intro: b.intro, quiz: b.quiz || "", subs: list.filter(x => x.lessons.length) };

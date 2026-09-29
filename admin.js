@@ -1236,8 +1236,11 @@ async function admMaterials(local) {                 /* local — своя ко�
         const sb = el("span", "mbtn"); headBtns(sb, "sub", g.s); ht.appendChild(sb);
         sec.appendChild(ht);
       }
+      let gname = null;                              /* подборка внутри темы — та же группировка, что видит сотрудник */
       g.ls.forEach(l => {
-        const r = el("div", "mrow" + (truthy(l.active) ? "" : " off") + (truthy(l.ready) ? "" : " soonrow"));
+        const gr = String(l.group || "");
+        if (gr !== gname) { gname = gr; if (gr) sec.appendChild(el("div", "mgroup", esc(gr))); }
+        const r = el("div", "mrow" + (gr ? " ingroup" : "") + (truthy(l.active) ? "" : " off") + (truthy(l.ready) ? "" : " soonrow"));
         r.dataset.mk = "l:" + l.id;
         r.innerHTML = `<span class="ic">${KIND[l.kind] || "•"}</span><span class="t">${esc(l.title)}
             <small>${esc(l.kind)}</small></span>
@@ -1378,6 +1381,11 @@ function lessonForm(l, d) {
       <div class="mf-del" id="bdel" hidden><button class="link" type="button"></button></div>
       <label class="f">Тема внутри блока</label>
       <select id="lsub"></select>
+      <label class="f">Подборка внутри темы (необязательно)</label>
+      <input type="text" id="lgroup" list="lgroups" value="${esc(l ? (l.group || "") : "")}" placeholder="Например: Видео с YouTube">
+      <datalist id="lgroups"></datalist>
+      <p class="hint tiny">Материалы с одинаковой подборкой встанут в теме отдельной группой со своим заголовком.
+        Пусто — материал идёт в общем списке темы.</p>
       <button class="link mf-link" type="button" id="nsOpen">＋ Создать новую тему</button>
       <div class="mf-new" id="nsBox" hidden><input type="text" id="nsTitle" placeholder="Название новой темы"><button class="btn small" type="button" id="nsOk">Создать тему</button>
         <button class="x" type="button" data-x="nsBox" title="Не создавать">×</button></div>
@@ -1401,6 +1409,10 @@ function lessonForm(l, d) {
   if (l) $$("#lkind").value = l.kind;
   const subsOf = n => d.subs.filter(s => Number(s.block) === Number(n));
   const matesOf = () => d.lessons.filter(x => Number(x.block) === Number(S.block) && String(x.sub || "") === S.sub && (!l || x.id !== l.id));
+  const fillGroups = () => {                          /* подсказываем подборки, которые уже есть в этой теме */
+    const names = [...new Set(matesOf().map(x => String(x.group || "")).filter(Boolean))];
+    $$("#lgroups").innerHTML = names.map(g => `<option value="${esc(g)}">`).join("");
+  };
   const fillBlocks = () => {
     $$("#lblock").innerHTML = d.blocks.map(b => `<option value="${b.n}">${numOf(b) === "" ? "(скрыт) " : numPref(b)}${esc(b.title)}</option>`).join("") + `<option value="__new">＋ Новый блок…</option>`;
     $$("#lblock").value = S.block;
@@ -1413,6 +1425,7 @@ function lessonForm(l, d) {
     $$("#lsub").value = S.sub;
   };
   const fillAfter = () => {
+    fillGroups();                                     /* тема сменилась — подсказки подборок тоже */
     const mates = matesOf();
     $$("#lafter").innerHTML = (l ? `<option value="keep">Оставить на своём месте</option>` : "") +
       `<option value="end">В конец ${S.sub ? "темы" : "блока"}</option><option value="start">В начало</option>` +
@@ -1555,6 +1568,7 @@ function lessonForm(l, d) {
   $$('[data-a="1"]').onclick = once(async () => {
     const data = { id: l ? l.id : "", block: S.block, sub: S.sub, title: $$("#ltitle").value.trim(), kind: $$("#lkind").value,
       url: $$("#lurl").value.trim(), note: $$("#lnote").value.trim(), after: S.after,
+      group: $$("#lgroup").value.trim(),
       ready: $$("#lready").checked, active: $$("#lact").checked };
     if (!data.title) { toast("Напишите название"); return; }
     if (data.ready && !data.url) { toast("У готового материала нужна ссылка. Или снимите «Материал готов»"); return; }
@@ -1564,7 +1578,7 @@ function lessonForm(l, d) {
       const переставили = !l || (data.after && data.after !== "keep") ||
                           String(l.sub || "") !== String(data.sub || "") || Number(l.block) !== Number(data.block);
       const r = await api("admin.lessonSave", { data: data });
-      const fields = { block: data.block, sub: data.sub, title: data.title, kind: data.kind, url: data.url, note: data.note, ready: data.ready, active: data.active };
+      const fields = { block: data.block, sub: data.sub, title: data.title, kind: data.kind, url: data.url, note: data.note, group: data.group, ready: data.ready, active: data.active };
       if (l) Object.assign(l, fields); else d.lessons.push(Object.assign({ id: r.id, order: 99999, createdBy: APP.user.id }, fields));
       close(); PR.program = null;
       /* порядок пересчитывает сервер, но ждать его ответа 5–10 секунд нельзя:
