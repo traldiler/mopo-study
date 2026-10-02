@@ -3183,6 +3183,12 @@ async function demoCall(action, d) {
       rows.push({ version: prev.version + 1, reset: true, at: new Date().toISOString(), by: demoMe().fio, retakeAt: d.retake ? new Date().toISOString() : prev.retakeAt || "" });
       return { ok: true };
     }
+    case "admin.keyReload": {                                                                     /* в демо ключ лежит рядом с сайтом, а не на Диске */
+      await quizFiles();
+      const ex = JSON.parse(await matLoad("data/exam.json"));
+      return { n: ex.blocks.reduce((n, b) => n + b.questions.length, 0), quizzes: Object.keys(QZ.key.quizzes || {}).length,
+               at: new Date().toISOString(), name: "key.json" };
+    }
     case "admin.blockMove": await demoOp("blockMove", { n: d.n, dir: Number(d.dir) }); return { ok: true };
     case "admin.blockOrder": await demoOp("blockOrder", { list: d.list || [] }); return { ok: true };
     case "admin.subOrder": await demoOp("subOrder", { block: d.block, list: d.list || [] }); return { ok: true };

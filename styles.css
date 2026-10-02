@@ -1627,6 +1627,7 @@ label.f{font-family:var(--f-text); font-size:13px; font-weight:600; letter-spaci
 
 /* ошибка входа — заметным цветом, а не как подсказка */
 .hint.bad{color:var(--bad-ink); font-weight:600;}
+.hint.good{color:var(--ok-ink); font-weight:600;}
 
 /* новый ответ РОПа: зелёный значок в меню и рамка у карточки вопроса */
 .top nav .badge.good{background:var(--ok-ink,#14795A);}

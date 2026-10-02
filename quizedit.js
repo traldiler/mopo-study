@@ -15,6 +15,9 @@ async function quizEditor({ quizId, sub, block, topic, lessons, onDone, mode, ba
   } catch (e) { return fail(e); }
   Q.questions.forEach(x => { if (x.type !== "match") x.answer = [].concat(x.answer || []).map(String); });
 
+  /* сколько исходных вопросов по теме видит кабинет (exam.json) и сколько прислал сервер (key.json на Диске) */
+  const origN = exam ? Q.questions.filter(x => x.orig).length + Q.locked.length : 0;
+  const lost = exam && !Q.demoNoKey && typeof baseN === "number" ? Math.max(0, baseN - origN) : 0;
   const back = el("div", "modal-back");
   back.innerHTML = `<div class="modal quizform" role="dialog" aria-modal="true">
     <div class="qe-top"><div><div class="flab">${exam ? "Вопросы в экзамене" : quizId ? "Мини-тест" : "Новый мини-тест"}</div><div class="qe-h">${esc(topic)}</div></div>
@@ -22,6 +25,7 @@ async function quizEditor({ quizId, sub, block, topic, lessons, onDone, mode, ba
     ${exam ? `<div class="qe-meta">Здесь все вопросы экзамена по этим материалам — исходные и добавленные. Правьте, удаляйте, меняйте порядок и добавляйте, как в мини-тесте.
         Исправление сразу увидят те, кто начнёт экзамен после сохранения; прежние попытки остаются как были.${Q.editedBy ? ` Последняя правка: ${esc(Q.editedBy)}${Q.editedAt ? ", " + esc(dayRu(Q.editedAt)) : ""}.` : ""}</div>
       <label class="fck qe-inc"><input type="checkbox" id="qeinc" ${Q.include ? "checked" : ""}><u></u>Включить в экзамен</label>
+      ${lost ? `<div class="note warn">Сервер не видит ${plural(lost, "исходный вопрос", "исходных вопроса", "исходных вопросов")} по этим материалам — сотрудники их в экзамене уже видят, а здесь показать нечего. Так бывает, когда на Диске лежит старый <b>key.json</b>: положите новый файл и откройте это окно заново. Пока расхождение не ушло, сохранять нельзя — иначе тема снимется с экзамена.</div>` : ""}
       ${Q.demoNoKey ? `<div class="note warn">Демо: правильные ответы исходных вопросов знает только сервер, поэтому здесь они не отмечены. В рабочей версии отметки придут вместе с вопросами. Чтобы сохранить в демо — отметьте ответы сами.</div>` : ""}
       ${Q.locked.length ? `<details class="qe-locked"><summary>Ещё ${plural(Q.locked.length, "задание", "задания", "заданий")} только для просмотра — развёрнутый ответ или тренажёр</summary>
         ${Q.locked.map(x => `<div class="qe-lock"><span class="tag">${{ short: "развёрнутый ответ", sim_dsk: "тренажёр ДСК", sim_pick: "подбор оборудования", sim_chat: "переписка с клиентом" }[x.type] || x.type}${x.points > 1 ? " · " + x.points + " балла" : ""}</span>${esc(x.text)}</div>`).join("")}
@@ -51,7 +55,7 @@ async function quizEditor({ quizId, sub, block, topic, lessons, onDone, mode, ba
   };
   const draw = () => {
     const host = $$("#qelist"); host.innerHTML = "";
-    if (exam && !Q.questions.length) host.appendChild(el("p", "hint qe-empty", source
+    if (exam && !Q.questions.length && !lost) host.appendChild(el("p", "hint qe-empty", source
       ? "Вопросов пока нет. Возьмите их из мини-теста темы или напишите свои."
       : "Вопросов пока нет. Напишите их — у темы нет мини-теста, из которого можно взять."));
     Q.questions.forEach((x, i) => host.appendChild(qeCard(x, i)));
@@ -147,6 +151,8 @@ async function quizEditor({ quizId, sub, block, topic, lessons, onDone, mode, ba
     $$("#qetitle").oninput = e => { Q.title = e.target.value; };
     $$("#qepass").onchange = e => { Q.pass = Number(e.target.value); };
   } else $$("#qeinc").onchange = e => { Q.include = e.target.checked; };
+  /* сервер видит не все исходные вопросы: сохранение затёрло бы их списком из окна */
+  if (lost) { $$("#qeinc").disabled = true; $$('[data-a="1"]').disabled = true; }
   $$("#qeadd").onclick = () => { Q.questions.push(qeBlank("single")); draw(); back.querySelector(".qe:last-child textarea").focus(); };
   if ($$("#qefrom")) $$("#qefrom").onclick = async () => {
     const have = new Set(Q.questions.map(x => String(x.text || "").trim()));

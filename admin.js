@@ -1705,9 +1705,26 @@ async function admSettings() {
         <input type="text" id="accmail" placeholder="ivanov@gmail.com" style="max-width:280px">
       </div>
       <div class="foot"><button class="btn white" id="accload" type="button">Показать список файлов</button></div>
-      <div id="accres"></div></div>` : ""}`;
+      <div id="accres"></div></div>` : ""}
+
+    ${dev ? `<div class="card" id="keycard"><h2>Ответы и разборы экзамена</h2>
+      <p class="lead">Правильные ответы лежат отдельным файлом <b>key.json</b> на Диске — на сайте их нет, чтобы их нельзя было
+        подсмотреть через код страницы. Сервис держит этот файл у себя в памяти и сам сверяет его при сдаче экзамена,
+        так что обычно ничего нажимать не нужно. Кнопка ниже — если заменили файл и хотите убедиться прямо сейчас.</p>
+      <div class="foot"><button class="btn white" id="keyre" type="button">Перечитать key.json</button></div>
+      <div id="keyres"></div></div>` : ""}`;
 
   $("#drvcheck").onclick = () => drvStatus();
+  if ($("#keyre")) $("#keyre").onclick = once(async () => {
+    const b = $("#keyre"), out = $("#keyres"), was = b.textContent;
+    b.disabled = true; b.textContent = "Читаем…"; out.innerHTML = "";
+    try {
+      const r = await api("admin.keyReload");
+      out.innerHTML = `<p class="hint good">Прочитан заново: ${plural(r.n, "вопрос", "вопроса", "вопросов")} экзамена,
+        ${plural(r.quizzes, "мини-тест", "мини-теста", "мини-тестов")}. Файл на Диске изменён ${esc(new Date(r.at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }))}.</p>`;
+    } catch (e) { out.innerHTML = `<p class="hint bad">Не удалось прочитать key.json: ${esc(e.message || e)}</p>`; }
+    b.disabled = false; b.textContent = was;
+  });
   if ($("#accload")) $("#accload").onclick = () => accFiles();
   $("#csave").onclick = once(async () => {
     const g = $("#wagroup").value.trim();
