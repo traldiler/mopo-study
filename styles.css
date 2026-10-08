@@ -1812,3 +1812,74 @@ label.f{font-family:var(--f-text); font-size:13px; font-weight:600; letter-spaci
 .mgroup{margin:10px 0 4px 8px; font:800 12px/1.4 var(--font); letter-spacing:.06em; text-transform:uppercase; color:var(--muted);}
 .mrow.ingroup{margin-left:14px;}
 @media (max-width:760px){ .lgroup .les, .mrow.ingroup{margin-left:8px;} }
+
+/* ===== плашки руководителя: новый / обновлённый материал, новый тест ===== */
+.fbadge{display:inline-block; vertical-align:middle; font:700 10px/1 "Onest",sans-serif; letter-spacing:.06em; text-transform:uppercase;
+  padding:5px 8px 4px; border-radius:4px; margin:0 8px 3px 0; color:#fff; background:#C84E17; white-space:nowrap;
+  box-shadow:0 0 0 3px rgba(200,78,23,.15); animation:fbPulse 2.4s ease-in-out infinite;}
+.fbadge.upd{background:#1F6FD1; box-shadow:0 0 0 3px rgba(31,111,209,.15);}
+.fbadge.retest{background:#7A3FC6; box-shadow:0 0 0 3px rgba(122,63,198,.15);}
+@keyframes fbPulse{50%{box-shadow:0 0 0 6px rgba(200,78,23,0);}}
+@media (prefers-reduced-motion:reduce){.fbadge{animation:none;}}
+.fbadges{display:flex; flex-wrap:wrap; margin:6px 0 2px;}
+.fbadges:empty{display:none;}
+.les.flagged{border-color:#E9A27F; background:#FFF8F3;}
+.subhead h3 .fbadge,.tt .fbadge{margin-left:8px; font-size:9px;}
+.fdot{display:inline-block; width:8px; height:8px; border-radius:50%; background:#C84E17; margin-right:6px; vertical-align:middle;}
+.mflag{display:inline-flex; align-items:center; gap:6px; margin-right:6px;}
+.mflag select{font-size:12px; padding:4px 6px; border-radius:4px; border:1px solid #949199; background:#fff; max-width:170px;}
+.mflag.on select{border-color:#C84E17; background:#FFF1E8; font-weight:700; color:#B84613;}
+.mflag.on.upd select{border-color:#1F6FD1; background:#EEF4FD; color:#1A5BB0;}
+.mflag.on.retest select{border-color:#7A3FC6; background:#F4EEFC; color:#62309F;}
+.mflag i{font-style:normal; font-size:11px; color:#69676E; white-space:nowrap;}
+
+/* ===== задание «расставьте по порядку» ===== */
+.sim.order .opal{display:flex; flex-direction:column; gap:6px; margin-bottom:14px;}
+.sim.order .opal button{display:flex; gap:10px; align-items:flex-start; text-align:left; padding:9px 12px; border:1px solid #D5D3D8;
+  border-radius:6px; background:#fff; font:inherit; font-size:14px; cursor:pointer;}
+.sim.order .opal button span{color:#C84E17; font-weight:700;}
+.sim.order .opal button:disabled{opacity:.4; cursor:default;}
+.ochain{list-style:none; margin:0 0 10px; padding:0; display:flex; flex-direction:column; gap:6px; counter-reset:none;}
+.ochain .empty{padding:14px; border:1px dashed #C9C7CC; border-radius:6px; color:#69676E; font-size:13px;}
+.ostep{display:flex; gap:10px; align-items:center; padding:9px 10px; border-radius:6px; background:#EEF1F6; border:1px solid #D6DCE6;}
+.ostep > b{flex:none; width:24px; height:24px; border-radius:50%; background:#1C2538; color:#fff; display:flex; align-items:center; justify-content:center; font-size:12px;}
+.ostep > span{flex:1; font-size:14px;}
+.omv{display:flex; gap:4px; flex:none;}
+.omv button{width:32px; height:32px; border-radius:4px; border:1px solid #C9C7CC; background:#fff; cursor:pointer; font-size:15px;}
+.omv button:disabled{opacity:.35; cursor:default;}
+.omv .ox{color:#B84613;}
+
+/* ===== тренажёр «просчёт по файлу завода» — как форма на treidcalc.ru ===== */
+.calc{display:flex; flex-direction:column; gap:12px;}
+.calc .ctop{display:flex; gap:12px; align-items:center; flex-wrap:wrap;}
+.calc .ctop .hint{margin:0; flex:1; min-width:220px;}
+.cblk{border:2px solid #CDEBD6; background:#F1FAF3; border-radius:12px; padding:12px 14px;}
+.cblk.blue{border-color:#C9DAF6; background:#F0F5FD;}
+.cblk.orange{border-color:#F4D3B5; background:#FFF6EE;}
+.cblk.white{border-color:#E4E2E6; background:#fff;}
+.cblk .ch{display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;}
+.cblk .ch b{font-size:15px;} .cblk .ch i{font-style:normal; font-size:11px; font-weight:700; padding:3px 8px; border-radius:10px; background:#D5F0DD;}
+.cblk.blue .ch i{background:#D6E4FA;} .cblk.orange .ch i{background:#FBE0C9;}
+.cgrid{display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px 12px;}
+.cf{display:flex; flex-direction:column; gap:4px; font-size:12px; color:#3D3B42;}
+.cf input,.cf .cout{font:inherit; font-size:15px; padding:10px 11px; border:1px solid #DAD8DD; border-radius:8px; background:#fff; min-height:42px; box-sizing:border-box; width:100%;}
+.cf input::placeholder{color:#B9B6BE;}
+.cf.req input{border:2px solid #E25B4F; background:#FFF6F5;}
+.cf .cout{background:#F4F6F8; color:#232227;}
+.calc .cblk.white .cgrid{grid-template-columns:repeat(3,minmax(0,1fr));}
+@media (max-width:760px){ .cgrid,.calc .cblk.white .cgrid{grid-template-columns:1fr 1fr;} }
+@media (max-width:440px){ .cgrid,.calc .cblk.white .cgrid{grid-template-columns:1fr;} }
+/* файл завода — окно поверх задания */
+.fov{position:fixed; inset:0; z-index:60; background:rgba(20,22,30,.62); display:flex; align-items:stretch; justify-content:center; padding:18px;}
+.fbox{background:#fff; border-radius:10px; width:min(1100px,100%); display:flex; flex-direction:column; overflow:hidden; box-shadow:0 20px 60px rgba(0,0,0,.35);}
+.fbar{display:flex; align-items:center; gap:8px; padding:10px 12px; border-bottom:1px solid #E4E2E6; flex-wrap:wrap;}
+.fbar b{flex:1; font-size:14px; min-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.fbar .btn{padding:6px 12px; min-height:34px;}
+.fbar .fz{font-size:12px; color:#69676E; min-width:40px; text-align:center;}
+.fscroll{flex:1; overflow:auto; background:#E9E8EC; padding:12px; -webkit-overflow-scrolling:touch;}
+.fscroll img{display:block; width:100%; height:auto; margin:0 auto; background:#fff; box-shadow:0 2px 10px rgba(0,0,0,.12);}
+.mrow .mflag{flex:none; font-size:inherit;}
+.mrow .mflag select{max-width:150px; font-size:11.5px; color:#69676E; border-color:#DAD8DD; padding:3px 4px;}
+.mrow .mflag.on select{color:inherit;}
+.mrow .mflag i{flex:none;}
+@media (max-width:760px){ .mrow{flex-wrap:wrap;} .mrow .mflag{order:5;} }

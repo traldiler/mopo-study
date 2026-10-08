@@ -44,6 +44,8 @@ function exAnswered(q) {
   if (q.type === "sim_dsk") return Array.isArray(a) && a.length >= 3;
   if (q.type === "sim_pick") return (a.set || []).length > 0 && String(a.why || "").trim().length > 2;
   if (q.type === "sim_chat") return Object.keys(a.steps || {}).length === q.steps.length && String(a.final || "").trim().length > 2;
+  if (q.type === "order") return Array.isArray(a) && a.length >= 2;
+  if (q.type === "sim_calc") return (q.need || []).every(k => String((a || {})[k] == null ? "" : a[k]).trim() !== "");
   return String(a).length > 0;
 }
 function exSave() { try { localStorage.setItem(LSKEY(), JSON.stringify({ answers: EX.answers, times: EX.times, startedAt: EX.startedAt, away: { count: EX.away.count, sec: EX.away.sec } })); } catch (_) { } }
@@ -180,8 +182,9 @@ function exBlock() {
 function exCard(q, idx) {
   const c = el("div", "q" + (exAnswered(q) ? " answered" : "")); c.id = "q-" + q.id;
   const kind = { single: "один ответ", multi: "несколько ответов", short: "короткий ответ", match: "соответствие",
-    odd: "убрать лишнее", sim_dsk: "тренажёр: соберите линию", sim_pick: "подбор оборудования", sim_chat: "переписка с клиентом" }[q.type] || "задание";
-  c.appendChild(el("div", "qn", `<b>ВОПРОС ${idx}</b><i>${kind}</i>${q.points > 1 ? `<i>${q.points} балла</i>` : ""}`));
+    odd: "убрать лишнее", sim_dsk: "тренажёр: соберите линию", sim_pick: "подбор оборудования", sim_chat: "переписка с клиентом",
+    order: "расставьте по порядку", sim_calc: "тренажёр: просчёт по файлу завода" }[q.type] || "задание";
+  c.appendChild(el("div", "qn", `<b>ВОПРОС ${idx}</b><i>${kind}</i>${q.points > 1 ? `<i>${plural(q.points, "балл", "балла", "баллов")}</i>` : ""}`));
   c.appendChild(el("p", "qt", esc(q.text)));
   if (q.scheme && EX.data.schemes[q.scheme])
     c.appendChild(el("figure", "figure", EX.data.schemes[q.scheme].svg + `<figcaption>${esc(EX.data.schemes[q.scheme].name)}</figcaption>`));
@@ -215,6 +218,10 @@ function exCard(q, idx) {
     });
   } else if (q.type === "sim_dsk") {
     box.appendChild(simDsk(q, set));
+  } else if (q.type === "order") {
+    box.appendChild(simOrder(q, set));
+  } else if (q.type === "sim_calc") {
+    box.appendChild(simCalc(q));
   } else if (q.type === "sim_pick") {
     const a = exGiven(q) || { set: [], why: "" };
     q.opts.forEach(o => {
@@ -294,6 +301,123 @@ function simDsk(q, set) {
   host.appendChild(rst);
   paint();
   return host;
+}
+
+/* ---------- расставить по порядку: цепочка из нужных шагов, лишние в неё не берут ---------- */
+function simOrder(q, set) {
+  const host = el("div", "sim order"), pal = el("div", "opal"), chain = el("ol", "ochain");
+  const get = () => (exGiven(q) || []).slice(), txt = id => ((q.opts || []).filter(o => o.id === id)[0] || {}).t || id;
+  const paint = () => {
+    const c = get();
+    chain.innerHTML = c.length ? "" : '<li class="empty">Пусто — добавьте шаги из списка выше</li>';
+    c.forEach((id, i) => {
+      const li = el("li", "ostep", `<b>${i + 1}</b><span>${esc(txt(id))}</span>`);
+      const mv = el("div", "omv"), U = el("button", "", "↑"), D = el("button", "", "↓"), X = el("button", "ox", "×");
+      U.type = D.type = X.type = "button"; U.title = "выше"; D.title = "ниже"; X.title = "убрать";
+      U.disabled = i === 0; D.disabled = i === c.length - 1;
+      U.onclick = () => { const v = get(); [v[i - 1], v[i]] = [v[i], v[i - 1]]; set(v); };
+      D.onclick = () => { const v = get(); [v[i + 1], v[i]] = [v[i], v[i + 1]]; set(v); };
+      X.onclick = () => { const v = get(); v.splice(i, 1); set(v); };
+      mv.appendChild(U); mv.appendChild(D); mv.appendChild(X); li.appendChild(mv); chain.appendChild(li);
+    });
+    pal.querySelectorAll("button[data-id]").forEach(b => { b.disabled = c.includes(b.dataset.id); });
+  };
+  q.opts.forEach(o => {
+    const b = el("button", "", `<span>＋</span>${esc(o.t)}`); b.type = "button"; b.dataset.id = o.id;
+    b.onclick = () => { const v = get(); if (!v.includes(o.id)) { v.push(o.id); set(v); } };
+    pal.appendChild(b);
+  });
+  const rst = el("button", "btn ghost", "Собрать заново"); rst.type = "button"; rst.onclick = () => set([]);
+  host.appendChild(el("h3", "", "Действия")); host.appendChild(pal);
+  host.appendChild(el("h3", "", "Ваша последовательность")); host.appendChild(chain);
+  host.appendChild(el("p", "hint", "Нажмите на действие, чтобы добавить его в цепочку. Порядок меняется стрелками ↑ ↓, крестик убирает шаг. Лишние действия в цепочку не берите."));
+  host.appendChild(rst);
+  paint();
+  return host;
+}
+
+/* ---------- тренажёр «просчёт по файлу завода» ----------
+   Форма как на сайте treidcalc.ru. Серые подсказки — образцы, не данные. Цена продажи считается по формуле сайта,
+   расходы 10–17 — примерно (пропорционально фурам, массе и цене); МОПО может их исправить, как на сайте.
+   Верность проверяет только сервер — правильных значений в браузере нет. */
+const calcNum = v => { const t = String(v == null ? "" : v).replace(/\s/g, "").replace(",", "."); return t === "" || isNaN(+t) ? null : +t; };
+const calcFmt = (v, d) => v == null || !isFinite(v) ? "—" : v.toLocaleString("ru-RU", { minimumFractionDigits: d || 0, maximumFractionDigits: d || 0 });
+function calcExp(q, a) {                                   /* расходы, которые сайт подставил бы сам */
+  const m = q.calc || {}, price = calcNum(a.price) || 0, mass = calcNum(a.mass) || 0, tr = calcNum(a.trucks) || 0, r100 = x => Math.round(x / 100) * 100;
+  return { e10: r100(m.ferry * tr), e11: r100(m.svh * tr), e12: r100(m.dk0 + m.dk * price), e13: r100(m.dk0 + m.dk * price),
+           e14: r100(m.ad0 + m.ad * price), e16: 0, e17: r100(m.cap * mass) };
+}
+function calcOut(q, a) {                                   /* цена продажи, себестоимость, ЗП — как считает сайт */
+  const m = q.calc || {}, P = calcNum(a.price), r = calcNum(a.rate), duty = calcNum(a.duty), p = calcNum(a.profit);
+  const E = ["e10", "e11", "e12", "e13", "e14", "e16", "e17"].reduce((s, k) => s + (calcNum(a[k]) || 0), 0);
+  if (P == null || r == null || p == null) return { E: E };
+  const base = P * r, d = base * (duty || 0) / 100, den = m.k1 * (1 / (1 + m.vat) - m.zp - m.k2) - p / 100;
+  if (den <= 0) return { E: E };
+  const S = m.k1 * (base + d + E) / den, Sy = Math.round(S / r), Sr = Math.round(Sy * r * 100) / 100, zp = Math.round(Sr * m.zp * 100) / 100;
+  return { E: E, Sy: Sy, Sr: Sr, zp: zp, cost: Math.round(S * (1 - p / 100) * 100) / 100, tot: E + zp };
+}
+function calcFile(q) {                                     /* файл завода — окном поверх задания, уходом со страницы не считается */
+  const ov = el("div", "fov"), box = el("div", "fbox");
+  let z = 100;
+  const img = el("img"); img.alt = q.file.name;
+  const sc0 = el("p", "hint", "Загружаем файл…");
+  if (q.file.img) img.src = q.file.img;
+  else matLoad(q.file.path).then(t => { q.file.img = String(t).trim(); img.src = q.file.img; sc0.remove(); })
+    .catch(e => { sc0.textContent = "Файл не загрузился: " + (e.message || e) + ". Закройте окно и откройте ещё раз."; });
+  const bar = el("div", "fbar", `<b>${esc(q.file.name)}</b>`), zm = el("span", "fz", "100%");
+  const btn = (t, f) => { const b = el("button", "btn ghost", t); b.type = "button"; b.onclick = f; return b; };
+  const zoom = d => { z = Math.max(50, Math.min(300, z + d)); img.style.width = z + "%"; zm.textContent = z + "%"; };
+  bar.appendChild(btn("−", () => zoom(-25))); bar.appendChild(zm); bar.appendChild(btn("+", () => zoom(25)));
+  const close = () => { ov.remove(); document.removeEventListener("keydown", esc_); };
+  const esc_ = e => { if (e.key === "Escape") close(); };
+  bar.appendChild(btn("× Закрыть", close));
+  const sc = el("div", "fscroll"); if (!q.file.img) sc.appendChild(sc0); sc.appendChild(img);
+  box.appendChild(bar); box.appendChild(sc); ov.appendChild(box);
+  ov.onclick = e => { if (e.target === ov) close(); };
+  document.addEventListener("keydown", esc_);
+  document.body.appendChild(ov);
+}
+function simCalc(q) {
+  const host = el("div", "calc"), a0 = () => Object.assign({}, exGiven(q) || {});
+  const top = el("div", "ctop");
+  const fb = el("button", "btn", "📄 Файл завода"); fb.type = "button"; fb.onclick = () => calcFile(q);
+  top.appendChild(fb); top.appendChild(el("span", "hint", "Откроется окном поверх задания — уходом со страницы это не считается."));
+  host.appendChild(top);
+  const out = {}, inp = {};
+  const field = (f, wrap) => {
+    const w = el("label", "cf" + (f.req ? " req" : "") + (f.ro ? " ro" : ""), `<span>${esc(f.label)}</span>`);
+    if (f.ro) { const o = el("div", "cout", f.val != null ? esc(f.val) : "—"); if (f.val == null) out[f.k] = o; w.appendChild(o); }
+    else {
+      const i = el("input"); i.type = "text"; i.inputMode = f.text ? "text" : "decimal"; i.placeholder = f.ph || ""; i.dataset.k = f.k;
+      i.oninput = () => {
+        const a = a0(); a[f.k] = i.value;
+        if (/^e1/.test(f.k)) { a.edited = Object.assign({}, a.edited || {}, { [f.k]: true }); }
+        EX.answers[q.id] = calcSync(q, a); exTouch(q, true); paint();
+      };
+      inp[f.k] = i; w.appendChild(i);
+    }
+    wrap.appendChild(w);
+  };
+  q.form.forEach(g => {
+    const sec = el("div", "cblk " + (g.tone || ""), `<div class="ch"><b>${esc(g.title)}</b>${g.tag ? `<i>${esc(g.tag)}</i>` : ""}</div>`);
+    const grid = el("div", "cgrid"); g.fields.forEach(f => field(f, grid)); sec.appendChild(grid); host.appendChild(sec);
+  });
+  host.appendChild(el("p", "hint", "НДС = 22%, налог на прибыль = 25% — как на сайте. Кнопок «Скачать PNG» и «Сохранить» в задании нет: вопрос о них — отдельно."));
+  const paint = () => {
+    const a = calcSync(q, a0()), c = calcOut(q, a);
+    Object.keys(inp).forEach(k => { if (document.activeElement !== inp[k]) inp[k].value = a[k] == null ? "" : a[k]; });
+    if (out.sy) out.sy.textContent = calcFmt(c.Sy); if (out.sr) out.sr.textContent = calcFmt(c.Sr, 1);
+    if (out.zp) out.zp.textContent = calcFmt(c.zp, 2); if (out.cost) out.cost.textContent = calcFmt(c.cost, 2);
+    if (out.tot) out.tot.textContent = calcFmt(c.tot, 2);
+  };
+  if (!exGiven(q)) EX.answers[q.id] = calcSync(q, Object.assign({}, q.start || {}));
+  paint();
+  return host;
+}
+function calcSync(q, a) {                                  /* расходы, которые МОПО не правил руками, пересчитываются сами */
+  const auto = calcExp(q, a), ed = a.edited || {};
+  Object.keys(auto).forEach(k => { if (!ed[k]) a[k] = String(auto[k]); });
+  return a;
 }
 
 /* ---------- время и внимание ---------- */
@@ -434,6 +558,8 @@ function demoGrade(data) {
       else if (q.type === "sim_dsk") givenText = g.join(" → ");
       else if (q.type === "sim_pick") givenText = "Набор: " + (g.set || []).map(x => optText(q, x)).join("; ") + ". Обоснование: " + (g.why || "");
       else if (q.type === "sim_chat") givenText = "Шаги: " + Object.keys(g.steps || {}).length + ". Финальный ответ: " + (g.final || "");
+      else if (q.type === "order") givenText = g.map((x, i) => (i + 1) + ") " + optText(q, x)).join("; ");
+      else if (q.type === "sim_calc") givenText = (q.form || []).flatMap(f => f.fields).filter(f => !f.ro).map(f => f.label + ": " + (g[f.k] || "—")).join("; ");
     }
     answers.push({ id: q.id, block: q.b, type: q.type, given: g, sec: a.sec || 0, points: p, max: q.points,
       correct: p === q.points, text: q.text, givenText: givenText,

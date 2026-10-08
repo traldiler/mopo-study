@@ -1187,6 +1187,27 @@ async function admMaterials(local) {                 /* local — своя ко�
     sh.onclick = async () => reload(shown ? await delMaterial(kind, row, d) : await setVisible(kind, row, true, d));
     wrap.appendChild(sh);
   };
+  /* плашка у материала или теста: ставит и снимает руководитель; снимется и сама, когда все ученики пройдут */
+  const flagSel = (kind, id) => {
+    const cur = (d.flags || {})[kind + ":" + id] || null, w = el("span", "mflag" + (cur ? " on " + cur.flag : ""));
+    const opts = kind === "quiz" ? [["", cur ? "снять плашку" : "＋ плашка"], ["retest", "Пройдите новый тест"]]
+      : [["", cur ? "снять плашку" : "＋ плашка"], ["new", "Новый материал"], ["upd", "Материал обновлён"]];
+    const sel = el("select"); sel.title = "Плашка для учеников: пока горит, прежняя отметка не засчитывается";
+    sel.innerHTML = opts.map(([v, t]) => `<option value="${v}" ${(cur ? cur.flag : "") === v ? "selected" : ""}>${t}</option>`).join("");
+    sel.onchange = async () => {
+      const v = sel.value;
+      if (v && !(await ask({ title: v === "retest" ? "Поставить «Пройдите новый тест»?" : "Поставить плашку «" + (v === "new" ? "Новый материал" : "Материал обновлён") + "»?",
+        text: v === "retest" ? "Прежняя сдача у учеников перестанет засчитываться — тест нужно пройти заново. Уже открытые блоки не закроются."
+          : "У учеников снимется прежняя отметка «пройдено» у этого материала, прогресс уменьшится. Уже открытые блоки не закроются.",
+        ok: "Поставить" }))) { sel.value = cur ? cur.flag : ""; return; }
+      sel.disabled = true;
+      try { const r = await api("admin.flag", { data: { kind: kind, id: id, flag: v } }); d.flags = r.flags || {}; PR.program = null; toast(v ? "Плашка поставлена" : "Плашка снята"); admMaterials(d); }
+      catch (e) { fail(e); sel.disabled = false; sel.value = cur ? cur.flag : ""; }
+    };
+    w.appendChild(sel);
+    if (cur) w.appendChild(el("i", "", cur.need ? `прошли ${cur.done} из ${cur.need}` : "учеников нет"));
+    return w;
+  };
   const quizRowAdm = (quizId, label, opts) => {
     const r = el("div", "mrow mquiz");
     r.innerHTML = quizId
@@ -1194,6 +1215,7 @@ async function admMaterials(local) {                 /* local — своя ко�
          <button class="btn small white" type="button">Изменить тест</button>`
       : `<button class="link" type="button">＋ ${esc(label)}</button>`;
     r.querySelector("button").onclick = () => quizEditor(Object.assign({ quizId: quizId, onDone: admMaterials }, opts));
+    if (quizId) r.insertBefore(flagSel("quiz", quizId), r.querySelector("button"));
     return r;
   };
   const examRow = (g, b, hasTopics) => {
@@ -1250,6 +1272,7 @@ async function admMaterials(local) {                 /* local — своя ко�
           ${truthy(l.active) ? "" : '<button class="mshow on" data-show="1" type="button">Показать</button>'}
           ${truthy(l.active) || canDelMat(l) ? `<button class="mdel" type="button" title="${canDelMat(l) ? "Удалить или спрятать" : "Спрятать от сотрудников"}">${canDelMat(l) ? "Удалить" : "Спрятать"}</button>` : ""}`;
         r.querySelector(".btn").onclick = () => lessonForm(l, d);
+        if (truthy(l.active) && truthy(l.ready)) r.insertBefore(flagSel("lesson", l.id), r.querySelector(".btn"));
         if (r.querySelector("[data-show]")) r.querySelector("[data-show]").onclick = async () => reload(await setVisible("lesson", l, true, d));
         if (r.querySelector(".mdel")) r.querySelector(".mdel").onclick = async () => reload(await delMaterial("lesson", l, d));
         sec.appendChild(r);

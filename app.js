@@ -565,13 +565,27 @@ function blockNum(n) {
 const subQuizzes = b => [b.quiz].concat(b.subs.map(s => s.quiz)).filter(Boolean);
 /* материалы с пометкой «скоро» ещё не загружены — в прохождении их не считаем, пока не появятся */
 const readyOf = ls => ls.filter(l => l.ready !== false);
+/* плашки руководителя: «Новый материал», «Материал обновлён», «Пройдите новый тест».
+   Пока плашка висит, прежняя галочка не считается, но уже открытые блоки не закрываются */
+const FLAG_TXT = { new: "Новый материал", upd: "Материал обновлён", retest: "Пройдите новый тест" };
+const flagPend = () => new Set((PR.progress && PR.progress.flagPending) || []);
+const lessonFlag = (l, pend) => l.flag && (pend || flagPend()).has(l.id) && !PR.progress.lessons[l.id] ? l.flag : "";
+const quizFlag = qid => { const q = (PR.progress.quizzes || {})[qid]; return q && q.retake && !q.passed ? "retest" : ""; };
+const flagBadge = f => f ? `<span class="fbadge ${f}">${FLAG_TXT[f]}</span>` : "";
+function flagsIn(subs, quizzes) {                          /* какие плашки горят в теме или блоке — по одной каждого вида */
+  const pend = flagPend(), out = [];
+  subs.forEach(s => s.lessons.forEach(l => { const f = l.ready !== false && lessonFlag(l, pend); if (f && out.indexOf(f) < 0) out.push(f); }));
+  if (quizzes.some(q => quizFlag(q)) && out.indexOf("retest") < 0) out.push("retest");
+  return out.map(flagBadge).join("");
+}
 function blockStat(b) {
-  const all = b.subs.flatMap(s => s.lessons), lessons = readyOf(all);
+  const all = b.subs.flatMap(s => s.lessons), lessons = readyOf(all), pend = flagPend();
   const done = lessons.filter(l => PR.progress.lessons[l.id]).length;
+  const need = lessons.filter(l => !lessonFlag(l, pend)), needDone = need.filter(l => PR.progress.lessons[l.id]).length;
   const qs = subQuizzes(b), passed = qs.filter(q => (PR.progress.quizzes[q] || {}).passed).length;
   const kept = qs.filter(q => { const x = PR.progress.quizzes[q] || {}; return x.passed || x.retake; }).length;   /* тест обновили — следующий блок не запираем */
   return { lessons: lessons.length, soon: all.length - lessons.length, done: done, quizzes: qs, passed: passed,
-           ready: done === lessons.length && passed === qs.length, opens: done === lessons.length && kept === qs.length, started: done > 0 || passed > 0 };
+           ready: done === lessons.length && passed === qs.length, opens: needDone === need.length && kept === qs.length, started: done > 0 || passed > 0 };
 }
 function openMap() {
   const out = {}; let allow = true;
@@ -655,7 +669,7 @@ async function screenCabinet(keep) {
       <div class="bc-body">
         <div class="bc-line"><span class="bc-num">Блок ${blockNum(b.n)}</span>
           <span class="bc-state">${st.ready ? "пройден" : isOpen ? "идёт сейчас" : "закрыт"}</span></div>
-        <h4>${esc(b.title)}</h4>
+        <h4>${esc(b.title)}</h4>${isOpen ? `<div class="fbadges">${flagsIn(b.subs, st.quizzes)}</div>` : ""}
         <div class="bc-meta">${plural(st.lessons, "материал", "материала", "материалов")}${st.quizzes.length ? " · " + plural(st.quizzes.length, "тест", "теста", "тестов") : ""}</div>
       </div>
       <div class="bc-prog"><div class="hbar small"><i style="width:${pct(st.done, st.lessons)}%"></i></div>
@@ -711,7 +725,8 @@ function openBlock(n, focusLesson, subIndex) {
           const rl = readyOf(s.lessons), dn = rl.filter(l => PR.progress.lessons[l.id]).length;
           const q = s.quiz ? PR.progress.quizzes[s.quiz] : null;
           const cls = dn === rl.length && (!s.quiz || (q && q.passed)) ? "ok" : dn ? "part" : "";
-          return `<button type="button" data-i="${i}" class="${cls}${i === cur ? " on" : ""}">${esc(s.title || "Материалы")}<i>${dn}/${rl.length}</i></button>`;
+          const fl = flagsIn([s], s.quiz ? [s.quiz] : []) ? '<em class="fdot" title="Есть новое или обновлённое"></em>' : "";
+          return `<button type="button" data-i="${i}" class="${cls}${i === cur ? " on" : ""}">${fl}${esc(s.title || "Материалы")}<i>${dn}/${rl.length}</i></button>`;
         }).join("")}
         <button type="button" data-all="1" class="ghost">Показать все темы</button></div>` : ""}
     <div id="subs"></div>`;
@@ -726,7 +741,7 @@ function openBlock(n, focusLesson, subIndex) {
   const drawSub = (sub, i) => {
     const sec = el("section", "sub"); sec.id = "sub-" + i;
     const { dn, q } = subStat(sub);
-    if (sub.title) sec.innerHTML = `<div class="subhead"><h3>${esc(sub.title)}</h3>
+    if (sub.title) sec.innerHTML = `<div class="subhead"><h3>${esc(sub.title)}${flagsIn([sub], sub.quiz ? [sub.quiz] : [])}</h3>
       <span>${dn} / ${readyOf(sub.lessons).length}${sub.quiz ? (q && q.passed ? " · тест сдан" : q && q.retake ? " · тест обновлён" : " · тест не сдан") : ""}</span>
       <div class="hbar small"><i style="width:${pct(dn, readyOf(sub.lessons).length)}%"></i></div></div>`;
     /* третий уровень: материалы с одинаковой пометкой собираются в подборку внутри темы («Видео с YouTube») */
@@ -762,7 +777,7 @@ function openBlock(n, focusLesson, subIndex) {
       const { dn, q, total, ok } = subStat(sub);
       const row = el("button", "trow " + (ok ? "ok" : dn ? "part" : "")); row.type = "button";
       row.innerHTML = `<span class="tnum">${i + 1}</span>
-        <span class="tt">${esc(sub.title || "Материалы")}
+        <span class="tt">${esc(sub.title || "Материалы")}${flagsIn([sub], sub.quiz ? [sub.quiz] : [])}
           <small>${plural(total, "материал", "материала", "материалов")}${sub.quiz ? " · мини-тест" + (q && q.passed ? " сдан" : q && q.retake ? " обновлён — пересдайте" : "") : ""}</small></span>
         <span class="tpr"><span class="hbar small"><i style="width:${pct(dn, total)}%"></i></span><i>${dn}/${total}</i></span>
         <span class="tgo">${ok ? "✓" : "→"}</span>`;
@@ -834,8 +849,10 @@ function lessonRow(l) {
   const all = (PR.progress.notes || {})[l.id] || [], notes = all.filter(n => !n.kind || n.kind === "note"),
         hls = all.filter(n => n.kind === "hl").length, marked = all.some(n => n.kind === "bm");
   const row = el("div", "les" + (l.ready ? "" : " soon") + (done ? " done" : "")); row.id = "les-" + l.id;
+  const fl = l.ready ? lessonFlag(l) : "";
+  if (fl) row.classList.add("flagged");
   row.innerHTML = `<div class="ic">${KIND[l.kind] || "•"}</div>
-    <div class="t">${esc(l.title)}<small>${esc(l.kind)}${l.note ? " · " + esc(l.note) : ""}${notes.length ? " · " + plural(notes.length, "заметка", "заметки", "заметок") : ""}${hls ? " · " + plural(hls, "выделение", "выделения", "выделений") : ""}</small></div>`;
+    <div class="t">${flagBadge(fl)}${esc(l.title)}<small>${esc(l.kind)}${l.note ? " · " + esc(l.note) : ""}${notes.length ? " · " + plural(notes.length, "заметка", "заметки", "заметок") : ""}${hls ? " · " + plural(hls, "выделение", "выделения", "выделений") : ""}</small></div>`;
   if (l.ready) {
     const ext = outsideOnly(l);                                            /* показывается только отдельной вкладкой */
     const open = el("button", "go"); open.type = "button"; open.onclick = () => openLesson(l);
@@ -862,7 +879,8 @@ function quizMeta(quizId) {
 function quizRow(quizId, title) {
   const q = (PR.progress.quizzes || {})[quizId] || { attempts: 0 };
   const row = el("div", "les quiz");
-  row.innerHTML = `<div class="ic">✓</div><div class="t">${esc(title)}
+  if (quizFlag(quizId)) row.classList.add("flagged");
+  row.innerHTML = `<div class="ic">✓</div><div class="t">${flagBadge(quizFlag(quizId))}${esc(title)}
     <small>${q.passed ? `сдан: ${q.best} из ${q.total}` : q.retake ? `<b class="upd">Тест обновили — пройдите его заново.</b> Прежняя сдача сохранена, следующие блоки открыты` : q.attempts ? `попыток: ${q.attempts}, лучший ${q.best} из ${q.total}` : quizMeta(quizId)}</small></div>`;
   if (q.attempts) {
     const r = el("button", "go quiet", "Разбор"); r.type = "button";
@@ -2750,7 +2768,7 @@ try {                                              /* демо помнит за
   DEMO.retakes = DEMO.retakes || [];
 } catch (e) { /* хранилище недоступно — демо просто начнётся заново */ }
 function demoKeep() {
-  try { localStorage.setItem(DEMO_KEY, JSON.stringify({ users: DEMO.users, state: DEMO.state, questions: DEMO.questions, attempts: DEMO.attempts, retakes: DEMO.retakes, matOps: DEMO.matOps, resets: DEMO.resets, settings: DEMO.settings, quizEdits: DEMO.quizEdits, examExtra: DEMO.examExtra, cleanTest: true })); }
+  try { localStorage.setItem(DEMO_KEY, JSON.stringify({ users: DEMO.users, state: DEMO.state, questions: DEMO.questions, attempts: DEMO.attempts, retakes: DEMO.retakes, matOps: DEMO.matOps, flags: DEMO.flags || {}, resets: DEMO.resets, settings: DEMO.settings, quizEdits: DEMO.quizEdits, examExtra: DEMO.examExtra, cleanTest: true })); }
   catch (e) { /* не страшно */ }
 }
 const demoMe = () => DEMO.users[DEMO.who];
@@ -2832,8 +2850,17 @@ async function demoExamBase(unit) {
 }
 const demoCanDel = row => demoMe().role === "dev" || (!!row.createdBy && row.createdBy === demoMe().id);
 async function demoOp(t, d) { DEMO.matOps = DEMO.matOps || []; DEMO.matOps.push({ t: t, d: d }); }
-async function demoProgram() {
-  const base = await demoBase();
+async function demoProgram() {                    /* программа демо + плашки руководителя */
+  const p = await demoProgram0(), fl = DEMO.flags || {};
+  (p.blocks || []).forEach(b => {
+    b.quizFlag = b.quiz && fl["quiz:" + b.quiz] ? fl["quiz:" + b.quiz].flag : "";
+    b.subs.forEach(s => { s.quizFlag = s.quiz && fl["quiz:" + s.quiz] ? fl["quiz:" + s.quiz].flag : "";
+      s.lessons.forEach(l => { l.flag = fl["lesson:" + l.id] ? fl["lesson:" + l.id].flag : ""; }); });
+  });
+  return p;
+}
+async function demoProgram0() {
+  const base = JSON.parse(JSON.stringify(await demoBase()));
   if (!(DEMO.matOps || []).length) return base;
   const m = await demoMat();
   const первый = m.blocks.filter(b => b.active !== false).sort((a, b) => a.order - b.order)[0];
@@ -2865,10 +2892,22 @@ const demoState = () => DEMO.state[demoMe().id];
 /* «попросить пересдать»: сдача раньше правки теста не закрывает тему (сид-прогресс считаем сданным 14.09) */
 function demoRetake(quizzes) {
   Object.keys(quizzes || {}).forEach(id => {
-    const rows = (DEMO.quizEdits || {})[id] || [], since = rows.length ? rows[rows.length - 1].retakeAt : "", q = quizzes[id];
+    const rows = (DEMO.quizEdits || {})[id] || [], f = (DEMO.flags || {})["quiz:" + id], q = quizzes[id];
+    let since = rows.length ? rows[rows.length - 1].retakeAt : "";
+    if (f && f.at > (since || "")) since = f.at;            /* плашка «Пройдите новый тест» — как «попросить пересдать» */
     if (since && q.passed && String(q.passedAt || "2026-09-14") < since) { q.passed = false; q.retake = true; }
   });
   return quizzes;
+}
+function demoFlags() {                          /* сколько учеников демо прошли материал или тест после плашки */
+  const out = {}, us = Object.keys(DEMO.state || {}).filter(id => (Object.values(DEMO.users).filter(u => u.id === id)[0] || {}).role === "employee");
+  Object.keys(DEMO.flags || {}).forEach(k => {
+    const f = DEMO.flags[k], kind = k.split(":")[0], id = k.slice(kind.length + 1);
+    const done = us.filter(u => { const st = DEMO.state[u] || {};
+      return kind === "lesson" ? String((st.lessons || {})[id] || "") >= f.at : !!(st.quizzes || {})[id] && String(st.quizzes[id].passedAt || "") >= f.at; }).length;
+    out[k] = { flag: f.flag, at: f.at, need: us.length, done: done };
+  });
+  return out;
 }
 const demoResets = () => (DEMO.resets || []).filter(r => !r.doneAt && (demoMe().role === "dev" || r.role === "employee"));
 
@@ -3121,6 +3160,13 @@ async function demoCall(action, d) {
       demoPressesDone(demoMe().id);
       const set = DEMO.settings || {}, out = JSON.parse(JSON.stringify(demoState()));
       out.quizzes = demoRetake(out.quizzes);
+      out.flagPending = [];                                   /* старая галочка у материала с плашкой не считается */
+      Object.keys(DEMO.flags || {}).forEach(k => {
+        if (k.indexOf("lesson:") !== 0) return;
+        const id = k.slice(7), at = DEMO.flags[k].at, dn = out.lessons[id];
+        if (dn && String(dn) >= at) return;
+        delete out.lessons[id]; out.flagPending.push(id);
+      });
       return Object.assign(out, { waGroup: set.waGroup || "" });
     }
     case "note.save": {
@@ -3479,7 +3525,13 @@ async function demoCall(action, d) {
       if (st) { st.examAllowed = !!d.allow; st.examForce = !!d.allow && !!d.force; }
       return { ok: true };
     }
-    case "admin.materials": return JSON.parse(JSON.stringify(await demoMat()));
+    case "admin.materials": return Object.assign(JSON.parse(JSON.stringify(await demoMat())), { flags: demoFlags() });
+    case "admin.flag": {
+      DEMO.flags = DEMO.flags || {};
+      const key = (d.data.kind === "quiz" ? "quiz:" : "lesson:") + d.data.id;
+      if (d.data.flag) DEMO.flags[key] = { flag: d.data.flag, at: new Date().toISOString() }; else delete DEMO.flags[key];
+      PR.program = null; return { ok: true, flags: demoFlags() };
+    }
     case "admin.userSave": {
       const me = demoMe(), roles = me.role === "dev" ? ["employee", "admin", "dev"] : ["employee"];
       if (roles.indexOf(d.data.role || "employee") < 0) return { error: "Эту роль назначает разработчик" };
