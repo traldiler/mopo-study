@@ -62,10 +62,11 @@ async function admStudents() {
       const passed = qs.filter(q => (st.quizzes || {})[q] && st.quizzes[q].passed).length;
       const lessons = readyOf(b.subs.flatMap(s => s.lessons));
       const dn = lessons.filter(l => (st.lessons || {})[l.id]).length;
+      const empty = !lessons.length && !qs.length;          /* в блоке всё «скоро» — не «пройден» */
       const ready = dn === lessons.length && passed === qs.length;
       const started = dn > 0 || passed > 0;
       if (!ready && !current) current = b.n;
-      return `<span class="${ready ? "done" : started ? "part" : ""} ${!ready && current === b.n ? "now" : ""}" title="Блок ${blockNum(b.n)}: ${b.title} — материалов ${dn}/${lessons.length}, мини-тестов ${passed}/${qs.length}">${blockNum(b.n)}</span>`;
+      return `<span class="${empty ? "soon" : ready ? "done" : started ? "part" : ""} ${!ready && current === b.n ? "now" : ""}" title="Блок ${blockNum(b.n)}: ${b.title} — ${empty ? "материалы скоро появятся" : "материалов " + dn + "/" + lessons.length + ", мини-тестов " + passed + "/" + qs.length}">${blockNum(b.n)}</span>`;
     }).join("");
     const pct = totalLessons ? Math.round(doneLessons / totalLessons * 100) : 0;
     card.innerHTML = `<div class="sh">${avatarHtml(st, 34)}<div class="who2"><h4>${esc(st.fio)}</h4>

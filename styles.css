@@ -1883,3 +1883,9 @@ label.f{font-family:var(--f-text); font-size:13px; font-weight:600; letter-spaci
 .mrow .mflag.on select{color:inherit;}
 .mrow .mflag i{flex:none;}
 @media (max-width:760px){ .mrow{flex-wrap:wrap;} .mrow .mflag{order:5;} }
+/* блок, где все материалы «скоро»: не «пройден», а «скоро» */
+.bcard.soon{background:var(--paper); border-style:dashed;}
+.bcard.soon .bc-ico{background:var(--sand); color:#9A9384;} .bcard.soon .bc-state{background:#FBEDE4; color:#B84613;}
+.bcard.soon .bc-meta{color:var(--muted);}
+.hscale i.soon{opacity:.45;}
+.blocks-line span.soon{opacity:.5; border:1px dashed #C9C7CC; background:transparent;}

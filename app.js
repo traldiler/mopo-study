@@ -585,6 +585,7 @@ function blockStat(b) {
   const qs = subQuizzes(b), passed = qs.filter(q => (PR.progress.quizzes[q] || {}).passed).length;
   const kept = qs.filter(q => { const x = PR.progress.quizzes[q] || {}; return x.passed || x.retake; }).length;   /* тест обновили — следующий блок не запираем */
   return { lessons: lessons.length, soon: all.length - lessons.length, done: done, quizzes: qs, passed: passed,
+           empty: !lessons.length && !qs.length,          /* всё в блоке «скоро» — показываем «скоро», а не «пройден» */
            ready: done === lessons.length && passed === qs.length, opens: needDone === need.length && kept === qs.length, started: done > 0 || passed > 0 };
 }
 function openMap() {
@@ -638,7 +639,7 @@ async function screenCabinet(keep) {
         <div class="hbar"><i style="width:${pct(done, all.length)}%"></i></div>
         <div class="hscale" aria-hidden="true">${blocks.map(b => {
           const s2 = blockStat(b), o2 = open[b.n];
-          return `<i class="${s2.ready ? "done" : o2 ? "now" : "lock"}" style="--p:${pct(s2.done, s2.lessons)}%"><span>${blockNum(b.n)}</span></i>`;
+          return `<i class="${s2.empty ? "soon" : s2.ready ? "done" : o2 ? "now" : "lock"}" style="--p:${pct(s2.done, s2.lessons)}%"><span>${blockNum(b.n)}</span></i>`;
         }).join("")}</div>
       </div>
       <div class="hero-side">
@@ -663,17 +664,17 @@ async function screenCabinet(keep) {
   host.className = "cards " + (localStorage.getItem("mopo-view") || "list");
   blocks.forEach(b => {
     const st = blockStat(b), isOpen = open[b.n];
-    const state = st.ready ? "done" : isOpen ? "now" : "lock";
+    const state = st.empty ? "soon" : st.ready ? "done" : isOpen ? "now" : "lock";
     const c = el("button", "bcard " + state); c.type = "button";
     c.innerHTML = `<span class="bc-n" aria-hidden="true">${String(blockNum(b.n)).padStart(2, "0")}</span><div class="bc-ico">${blockIcon(b.n)}</div>
       <div class="bc-body">
         <div class="bc-line"><span class="bc-num">Блок ${blockNum(b.n)}</span>
-          <span class="bc-state">${st.ready ? "пройден" : isOpen ? "идёт сейчас" : "закрыт"}</span></div>
+          <span class="bc-state">${st.empty ? "скоро" : st.ready ? "пройден" : isOpen ? "идёт сейчас" : "закрыт"}</span></div>
         <h4>${esc(b.title)}</h4>${isOpen ? `<div class="fbadges">${flagsIn(b.subs, st.quizzes)}</div>` : ""}
-        <div class="bc-meta">${plural(st.lessons, "материал", "материала", "материалов")}${st.quizzes.length ? " · " + plural(st.quizzes.length, "тест", "теста", "тестов") : ""}</div>
+        <div class="bc-meta">${st.empty ? plural(st.soon, "материал", "материала", "материалов") + " скоро появятся" : plural(st.lessons, "материал", "материала", "материалов")}${st.quizzes.length ? " · " + plural(st.quizzes.length, "тест", "теста", "тестов") : ""}</div>
       </div>
       <div class="bc-prog"><div class="hbar small"><i style="width:${pct(st.done, st.lessons)}%"></i></div>
-        <span>${st.done} / ${st.lessons}${st.quizzes.length ? " · тесты " + st.passed + "/" + st.quizzes.length : ""}</span></div>`;
+        <span>${st.empty ? "скоро" : st.done + " / " + st.lessons}${st.quizzes.length ? " · тесты " + st.passed + "/" + st.quizzes.length : ""}</span></div>`;
     c.onclick = () => isOpen ? openBlock(b.n) : toast("Блок откроется, когда закроете предыдущий: материалы и мини-тест.");
     host.appendChild(c);
   });
@@ -710,7 +711,7 @@ function openBlock(n, focusLesson, subIndex) {
     <div class="crumbs"><button class="link" id="back" type="button">← Все блоки</button></div>
     <section class="bhero">
       <div class="bc-ico big">${blockIcon(n)}</div>
-      <div><div class="bc-num">Блок ${blockNum(n)}${st.ready ? " · пройден" : ""}</div>
+      <div><div class="bc-num">Блок ${blockNum(n)}${st.empty ? " · скоро" : st.ready ? " · пройден" : ""}</div>
         <h2>${esc(b.title)}</h2>${b.intro ? `<p class="lead">${esc(b.intro)}</p>` : ""}</div>
     </section>
     <div class="res">
