@@ -100,7 +100,7 @@ function quizCard(x, idx) {
     });
   } else {
     const multi = x.type === "multi";
-    x.opts.forEach(o => {
+    mixOpts(x.id, x.opts).forEach(o => {
       const lab = el("label", "opt");
       lab.innerHTML = `<input type="${multi ? "checkbox" : "radio"}" name="qz-${x.id}"><span>${esc(o.t)}</span>`;
       lab.querySelector("input").onchange = ev => {

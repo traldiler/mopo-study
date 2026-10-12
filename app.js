@@ -570,7 +570,7 @@ const readyOf = ls => ls.filter(l => l.ready !== false);
 const FLAG_TXT = { new: "Новый материал", upd: "Материал обновлён", retest: "Пройдите новый тест" };
 const flagPend = () => new Set((PR.progress && PR.progress.flagPending) || []);
 const lessonFlag = (l, pend) => l.flag && (pend || flagPend()).has(l.id) && !PR.progress.lessons[l.id] ? l.flag : "";
-const quizFlag = qid => { const q = (PR.progress.quizzes || {})[qid]; return q && q.retake && !q.passed ? "retest" : ""; };
+const quizFlag = qid => { const q = (PR.progress.quizzes || {})[qid]; return q && (q.retake || q.fresh) && !q.passed ? "retest" : ""; };
 const flagBadge = f => f ? `<span class="fbadge ${f}">${FLAG_TXT[f]}</span>` : "";
 function flagsIn(subs, quizzes) {                          /* какие плашки горят в теме или блоке — по одной каждого вида */
   const pend = flagPend(), out = [];
@@ -584,15 +584,18 @@ function blockStat(b) {
   const need = lessons.filter(l => !lessonFlag(l, pend)), needDone = need.filter(l => PR.progress.lessons[l.id]).length;
   const qs = subQuizzes(b), passed = qs.filter(q => (PR.progress.quizzes[q] || {}).passed).length;
   const kept = qs.filter(q => { const x = PR.progress.quizzes[q] || {}; return x.passed || x.retake; }).length;   /* тест обновили — следующий блок не запираем */
+  const keptNew = qs.filter(q => { const x = PR.progress.quizzes[q] || {}; return x.passed || x.retake || x.fresh; }).length;   /* + совсем новый тест с плашкой */
   return { lessons: lessons.length, soon: all.length - lessons.length, done: done, quizzes: qs, passed: passed,
            empty: !lessons.length && !qs.length,          /* всё в блоке «скоро» — показываем «скоро», а не «пройден» */
-           ready: done === lessons.length && passed === qs.length, opens: needDone === need.length && kept === qs.length, started: done > 0 || passed > 0 };
+           ready: done === lessons.length && passed === qs.length, opens: needDone === need.length && kept === qs.length, opensNew: needDone === need.length && keptNew === qs.length, started: done > 0 || passed > 0 };
 }
 function openMap() {
   const out = {}; let allow = true;
   /* РОП/разработчик и действующий МОПО (статус «Работает») видят все блоки сразу */
   if (isStaff(APP.user) || (APP.user && APP.user.stage === "work")) { PR.program.blocks.forEach(b => out[b.n] = true); return out; }
-  PR.program.blocks.forEach(b => { out[b.n] = allow; if (!blockStat(b).opens) allow = false; });
+  /* новый тест с плашкой не закрывает блоки, которые ученик уже начал: смотрим, начат ли хоть один блок дальше */
+  const bs = PR.program.blocks, st = bs.map(blockStat), later = bs.map((b, i) => st.slice(i + 1).some(s => s.started));
+  bs.forEach((b, i) => { out[b.n] = allow; if (!(st[i].opens || (st[i].opensNew && later[i]))) allow = false; });
   return out;
 }
 /* «Продолжить»: последний открытый материал, если он ещё не отмечен пройденным; иначе — первый непройденный по порядку */
@@ -743,7 +746,7 @@ function openBlock(n, focusLesson, subIndex) {
     const sec = el("section", "sub"); sec.id = "sub-" + i;
     const { dn, q } = subStat(sub);
     if (sub.title) sec.innerHTML = `<div class="subhead"><h3>${esc(sub.title)}${flagsIn([sub], sub.quiz ? [sub.quiz] : [])}</h3>
-      <span>${dn} / ${readyOf(sub.lessons).length}${sub.quiz ? (q && q.passed ? " · тест сдан" : q && q.retake ? " · тест обновлён" : " · тест не сдан") : ""}</span>
+      <span>${dn} / ${readyOf(sub.lessons).length}${sub.quiz ? (q && q.passed ? " · тест сдан" : q && q.retake ? " · тест обновлён" : q && q.fresh ? " · новый тест" : " · тест не сдан") : ""}</span>
       <div class="hbar small"><i style="width:${pct(dn, readyOf(sub.lessons).length)}%"></i></div></div>`;
     /* третий уровень: материалы с одинаковой пометкой собираются в подборку внутри темы («Видео с YouTube») */
     let gname = null, gbox = null;
@@ -779,7 +782,7 @@ function openBlock(n, focusLesson, subIndex) {
       const row = el("button", "trow " + (ok ? "ok" : dn ? "part" : "")); row.type = "button";
       row.innerHTML = `<span class="tnum">${i + 1}</span>
         <span class="tt">${esc(sub.title || "Материалы")}${flagsIn([sub], sub.quiz ? [sub.quiz] : [])}
-          <small>${plural(total, "материал", "материала", "материалов")}${sub.quiz ? " · мини-тест" + (q && q.passed ? " сдан" : q && q.retake ? " обновлён — пересдайте" : "") : ""}</small></span>
+          <small>${plural(total, "материал", "материала", "материалов")}${sub.quiz ? " · мини-тест" + (q && q.passed ? " сдан" : q && q.retake ? " обновлён — пересдайте" : q && q.fresh ? " новый — пройдите" : "") : ""}</small></span>
         <span class="tpr"><span class="hbar small"><i style="width:${pct(dn, total)}%"></i></span><i>${dn}/${total}</i></span>
         <span class="tgo">${ok ? "✓" : "→"}</span>`;
       row.onclick = () => openBlock(n, null, i);
@@ -882,7 +885,7 @@ function quizRow(quizId, title) {
   const row = el("div", "les quiz");
   if (quizFlag(quizId)) row.classList.add("flagged");
   row.innerHTML = `<div class="ic">✓</div><div class="t">${flagBadge(quizFlag(quizId))}${esc(title)}
-    <small>${q.passed ? `сдан: ${q.best} из ${q.total}` : q.retake ? `<b class="upd">Тест обновили — пройдите его заново.</b> Прежняя сдача сохранена, следующие блоки открыты` : q.attempts ? `попыток: ${q.attempts}, лучший ${q.best} из ${q.total}` : quizMeta(quizId)}</small></div>`;
+    <small>${q.passed ? `сдан: ${q.best} из ${q.total}` : q.retake ? `<b class="upd">Тест обновили — пройдите его заново.</b> Прежняя сдача сохранена, следующие блоки открыты` : q.fresh ? `<b class="upd">Новый тест — пройдите его.</b>` : q.attempts ? `попыток: ${q.attempts}, лучший ${q.best} из ${q.total}` : quizMeta(quizId)}</small></div>`;
   if (q.attempts) {
     const r = el("button", "go quiet", "Разбор"); r.type = "button";
     r.title = "Посмотреть свои ответы и пояснения по последней попытке";
@@ -2892,7 +2895,12 @@ function demoMigrate() {                           /* id уроков стали
 const demoState = () => DEMO.state[demoMe().id];
 /* «попросить пересдать»: сдача раньше правки теста не закрывает тему (сид-прогресс считаем сданным 14.09) */
 function demoRetake(quizzes) {
-  Object.keys(quizzes || {}).forEach(id => {
+  quizzes = quizzes || {};
+  Object.keys(DEMO.flags || {}).forEach(k => {            /* совсем новый тест с плашкой — как на сервере: не запирает следующие блоки */
+    const id = k.slice(5);
+    if (k.indexOf("quiz:") === 0 && !quizzes[id]) quizzes[id] = { attempts: 0, best: 0, total: 0, passed: false, retake: false, fresh: true };
+  });
+  Object.keys(quizzes).forEach(id => {
     const rows = (DEMO.quizEdits || {})[id] || [], f = (DEMO.flags || {})["quiz:" + id], q = quizzes[id];
     let since = rows.length ? rows[rows.length - 1].retakeAt : "";
     if (f && f.at > (since || "")) since = f.at;            /* плашка «Пройдите новый тест» — как «попросить пересдать» */

@@ -192,7 +192,7 @@ function exCard(q, idx) {
   const set = v => { EX.answers[q.id] = v; exTouch(q); exBlock(); };
   if (q.type === "single" || q.type === "multi" || q.type === "odd") {
     const multi = q.type === "multi";
-    q.opts.forEach(o => {
+    mixOpts(q.id, q.opts).forEach(o => {
       const on = multi ? (exGiven(q) || []).includes(o.id) : exGiven(q) === o.id;
       const lab = el("label", "opt" + (on ? (q.type === "odd" ? " strike" : " on") : ""));
       lab.innerHTML = `<input type="${multi ? "checkbox" : "radio"}" name="${q.id}" ${on ? "checked" : ""}><span>${esc(o.t)}</span>`;
@@ -224,7 +224,7 @@ function exCard(q, idx) {
     box.appendChild(simCalc(q));
   } else if (q.type === "sim_pick") {
     const a = exGiven(q) || { set: [], why: "" };
-    q.opts.forEach(o => {
+    mixOpts(q.id, q.opts).forEach(o => {
       const on = (a.set || []).includes(o.id);
       const lab = el("label", "opt" + (on ? " on" : ""));
       lab.innerHTML = `<input type="checkbox" ${on ? "checked" : ""}><span>${esc(o.t)}</span>`;
@@ -244,7 +244,7 @@ function exCard(q, idx) {
       const wrap = el("div", "chat");
       wrap.appendChild(el("div", "msg", `<b>Клиент:</b> ${esc(st.client)}`));
       const opts = el("div", "opts");
-      st.opts.forEach(o => {
+      mixOpts(q.id + ":" + i, st.opts).forEach(o => {
         const on = (a.steps || {})[i] === o.id;
         const lab = el("label", "opt" + (on ? " on" : ""));
         lab.innerHTML = `<input type="radio" name="${q.id}-${i}" ${on ? "checked" : ""}><span>${esc(o.t)}</span>`;
