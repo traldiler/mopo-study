@@ -1906,3 +1906,8 @@ label.f{font-family:var(--f-text); font-size:13px; font-weight:600; letter-spaci
 .rtq2 .hint{margin-top:6px;}
 @media (max-width:760px){ .rtup .btn{align-self:stretch; justify-content:center;} }
 .schint{margin:0 0 6px;}
+/* значок «видео уже было в другой теме» */
+.dupi{display:inline-flex; align-items:center; justify-content:center; width:18px; height:18px; margin:0 6px 0 0; padding:0; vertical-align:1px;
+  border-radius:50%; border:1.5px solid var(--muted); background:transparent; color:var(--muted); font:700 11px/1 Georgia, serif; font-style:italic; cursor:pointer;}
+.dupi.seen{border-color:#3B72E8; color:#3B72E8;}
+.dupi:hover{background:#EEF3FD;}

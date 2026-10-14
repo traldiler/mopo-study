@@ -848,6 +848,41 @@ function openBlock(n, focusLesson, subIndex) {
     };
   }
 }
+/* один и тот же ролик в нескольких темах: ключ — файл Диска, ролик YouTube или сам адрес */
+const DUPS = { prog: null, map: {} };
+function mediaKey(url) {
+  const u = String(url || "");
+  const d = u.match(/drive\.google\.com\/(?:file\/d\/|open\?id=)([A-Za-z0-9_-]{10,})/) || u.match(/[?&]id=([A-Za-z0-9_-]{10,})/);
+  if (d) return "d:" + d[1];
+  const y = u.match(/(?:youtube\.com\/(?:watch\?(?:.*&)?v=|shorts\/|embed\/)|youtu\.be\/)([A-Za-z0-9_-]{6,})/);
+  if (y) return "y:" + y[1];
+  return u ? "u:" + u.replace(/[#?].*$/, "").replace(/\/+$/, "") : "";
+}
+function lessonDups(l) {
+  if (DUPS.prog !== PR.program) {
+    DUPS.prog = PR.program; DUPS.map = {};
+    ((PR.program && PR.program.blocks) || []).forEach(b => (b.subs || []).forEach(sb => (sb.lessons || []).forEach(x => {
+      if (x.kind !== "видео" || !x.ready) return;
+      const k = mediaKey(x.url); if (k) (DUPS.map[k] = DUPS.map[k] || []).push({ l: x, b: b, sub: sb });
+    })));
+  }
+  if (l.kind !== "видео") return [];
+  return (DUPS.map[mediaKey(l.url)] || []).filter(x => x.l.id !== l.id);
+}
+/* значок «i» у ролика, который уже был в другой теме */
+function dupInfo(l) {
+  const others = lessonDups(l);
+  if (!others.length) return null;
+  const where = x => "блок " + blockNum(x.b.n) + (x.sub.title ? ", тема «" + x.sub.title + "»" : " «" + x.b.title + "»");
+  const seen = others.filter(x => PR.progress.lessons[x.l.id]);
+  const text = (seen.length ? "Вы уже смотрели это видео: " + seen.map(where).join("; ") + "."
+                            : "Это видео есть и в другой теме: " + others.map(where).join("; ") + ".") +
+    " Оно относится к нескольким темам, поэтому добавлено и сюда — пересмотрите, если хотите.";
+  const b = el("button", "dupi" + (seen.length ? " seen" : ""), "i"); b.type = "button"; b.title = text;
+  b.onclick = async e => { e.stopPropagation();
+    if (await ask({ title: seen.length ? "Это видео вы уже смотрели" : "Видео есть в другой теме", text: esc(text), ok: "Посмотреть", cancel: "Понятно" })) openLesson(l); };
+  return b;
+}
 function lessonRow(l) {
   const done = !!PR.progress.lessons[l.id];
   const all = (PR.progress.notes || {})[l.id] || [], notes = all.filter(n => !n.kind || n.kind === "note"),
@@ -864,6 +899,7 @@ function lessonRow(l) {
     open.innerHTML = ext ? 'Открыть<span class="wo"> в новой вкладке</span> ↗' : "Открыть";
     if (ext) open.title = "Эта страница не разрешает показывать себя внутри кабинета";
     const note = el("button", "go quiet", notes.length ? "Заметки" : "Заметка"); note.type = "button"; note.onclick = () => notesFor(l);
+    const di = dupInfo(l); if (di) row.querySelector(".t").prepend(di);
     const star = el("button", "star" + (marked ? " on" : ""), marked ? "★" : "☆"); star.type = "button";
     star.title = marked ? "Убрать из закладок" : "В закладки";
     star.onclick = async () => { await toggleBookmark(l); backToPlace(); };
@@ -2701,19 +2737,24 @@ document.addEventListener("click", () => setTimeout(locSave, 80), true);
 window.addEventListener("hashchange", () => {
   if (!APP.user || (typeof EX !== "undefined" && EX.running)) return;
   const l = new URLSearchParams(location.hash.slice(1)).get("l");
-  if (l && l !== LOC.l && lessonById(l)) openLessonById(l);
+  if (l && l !== LOC.l && lessonById(l)) openLessonAt(l);
 });
+/* материал по ссылке — внутри своего блока и темы: после «Закрыть» человек остаётся рядом с ним */
+async function openLessonAt(id) {
+  if (isStaff(APP.user)) try { localStorage.setItem(modeKey(), "mopo"); } catch (e) { }
+  if (APP.screen !== "cabinet" || (!document.getElementById("cards") && !document.getElementById("subs"))) { APP.screen = "cabinet"; renderNav(); await screenCabinet(); }
+  const f = lessonById(id);
+  if (!f) return toast("Материал не найден");
+  const n = Number(f.block.n);
+  if (openMap()[n]) openBlock(n, id);                 /* блок с нужной темой и подсветкой материала */
+  openLessonById(id);
+}
 async function locRestore() {
   const q = new URLSearchParams(location.hash.slice(1)), sc = q.get("s") || "";
   const staff = isStaff(APP.user);
   if (/^adm:/.test(sc) && staff) { go(sc); return true; }
   const lnk = q.get("l");
-  if (lnk && sc !== "exam" && !/^adm:/.test(sc)) {      /* ссылка на материал (её могли прислать из «Моих записей») — открываем сам материал */
-    APP.screen = "cabinet"; if (staff) try { localStorage.setItem(modeKey(), "mopo"); } catch (e) { }
-    renderNav(); await screenCabinet();
-    openLessonById(lnk);
-    return true;
-  }
+  if (lnk && sc !== "exam" && !/^adm:/.test(sc)) { await openLessonAt(lnk); return true; }   /* ссылка на материал (её могли прислать из «Моих записей») — открываем сам материал */
   if (/^(notes|questions|exam|profile)$/.test(sc)) { go(sc); return true; }
   if (sc === "cabinet") {
     APP.screen = "cabinet"; if (staff) try { localStorage.setItem(modeKey(), "mopo"); } catch (e) { }
