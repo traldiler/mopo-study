@@ -279,29 +279,49 @@ async function admAttempt(id, ready) {
 const RT_STATE = r => r.status === "done" ? { t: "сдана", c: "ok" }
   : r.available ? { t: "открыта сотруднику", c: "ok" }
   : r.status === "approved" && r.opensAt ? { t: "откроется " + new Date(r.opensAt).toLocaleDateString("ru-RU"), c: "wait" }
-  : r.status === "approved" ? { t: "утверждена, доступ закрыт", c: "retry" }
-  : rtBroken(r) ? { t: "сборка прервана: готово частей " + (r.built || 0) + " из " + r.parts, c: "retry" }
-  : { t: "черновик", c: "" };
-/* черновик, который ИИ не дособрал: страницу закрыли или перезагрузили во время сборки */
-const rtBroken = r => r.status === "draft" && r.parts > 0 && (r.built || 0) < r.parts;
+  : r.status === "approved" ? { t: "загружена, доступ закрыт", c: "retry" }
+  : { t: "черновик старого образца — загрузите файлы", c: "" };
+const RT_KIND = { single: "один ответ", multi: "несколько ответов", odd: "убрать лишнее", match: "соотнести", short: "своими словами",
+                  order: "по порядку", sim_pick: "подбор", sim_chat: "переписка", sim_dsk: "линия ДСК", sim_calc: "просчёт" };
+const rtName = r => "Пересдача" + (r.n ? " " + r.n : "");
+/* два файла пересдачи: вопросы — что видит сотрудник, ответы — ключ для проверки ИИ и отчёта */
+function rtUpload(host, target, done) {
+  host.innerHTML = `<div class="rtup">
+      <label class="f">1. Вопросы — то, что увидит сотрудник</label><input type="file" accept=".json,application/json" data-k="questions">
+      <label class="f">2. Ответы — для проверки ИИ и отчёта</label><input type="file" accept=".json,application/json" data-k="answers">
+      <div class="hint">Пересдача загрузится закрытой: сотрудник ничего не увидит, пока вы её не откроете — сразу или с даты.</div>
+      <div class="rterr" hidden></div>
+      <button class="btn small" type="button" data-go>${target.id ? "Заменить файлы" : "Загрузить пересдачу"}</button></div>`;
+  const err = host.querySelector(".rterr");
+  const read = f => new Promise((ok, no) => { const fr = new FileReader(); fr.onload = () => ok(String(fr.result)); fr.onerror = () => no(new Error("Файл не прочитался")); fr.readAsText(f, "utf-8"); });
+  host.querySelector("[data-go]").onclick = once(async () => {
+    const fs = {}; host.querySelectorAll("input[type=file]").forEach(i => fs[i.dataset.k] = i.files[0]);
+    err.hidden = true;
+    if (!fs.questions || !fs.answers) { err.textContent = "Выберите оба файла: вопросы и ответы"; err.hidden = false; return; }
+    try {
+      const body = Object.assign({ questions: await read(fs.questions), answers: await read(fs.answers) }, target);
+      const r = await api("admin.retakeUpload", body);
+      toast((target.id ? "Файлы заменены" : "Пересдача загружена") + " — " + plural(r.retake.count, "задание", "задания", "заданий"));
+      if (r.warn) toast(r.warn);
+      done(r.retake);
+    } catch (e) { err.textContent = e.message || String(e); err.hidden = false; }
+  });
+}
 function attemptRetakeBox(a) {
   const box = $("#rtbox"); if (!box) return;
-  const wrong = (a.answers || []).filter(r => !r.needsReview && r.correct !== true).length;
-  const rev = (a.answers || []).filter(r => r.needsReview).length;
   const list = a.retakes || [];
+  const busy = a.retakeOpen || list.some(r => r.status !== "done");
   box.innerHTML = `<h3>Разбор и пересдача</h3>
     <div class="rtline"><div><b>Разбор в кабинете сотрудника</b>
         <small>${a.sentAt ? "Отправлен — сотрудник видит свои ошибки с правильными ответами и ссылками на уроки. Скачать его нельзя." : "Сотрудник увидит разбор только после этой кнопки. Пока идёт пересдача, разбор у него скрыт."}</small></div>
       <button class="btn small ${a.sentAt ? "white" : ""}" id="asend" type="button">${a.sentAt ? "Убрать из кабинета" : "Отправить разбор в кабинет МОПО"}</button></div>
-    ${list.map(r => { const st = RT_STATE(r); return `<div class="rtline"><div><b>Пересдача · ${r.count} ${plural(r.count, "задание", "задания", "заданий").replace(/^\d+\s/, "")}</b>
-        <small><span class="tag ${st.c}">${esc(st.t)}</span>${rtBroken(r) ? " Готовые задания сохранены: можно дособрать недостающие части или открыть черновик как есть и дописать вручную." : ""}</small></div>
-      ${rtBroken(r) ? `<div class="rtbtns"><button class="btn small" data-rtc="${esc(r.id)}" type="button">Продолжить сборку</button>
-        <button class="btn small white" data-rt="${esc(r.id)}" type="button">Открыть</button>
-        <button class="btn small white" data-rtd="${esc(r.id)}" type="button">Удалить</button></div>`
-      : `<button class="btn small white" data-rt="${esc(r.id)}" type="button">${r.status === "done" ? "Посмотреть" : "Открыть"}</button>`}</div>`; }).join("")}
-    ${a.kind !== "retake" && wrong ? `<div class="rtline"><div><b>Индивидуальная пересдача</b>
-        <small>Ошибок: ${wrong}. ИИ составит ${wrong > 100 ? "100" : wrong > 80 ? wrong : "80"} заданий: не больше 15% — переформулировки заданий с ошибками, остальное — новые вопросы по материалам уроков. Больше всего — по блокам, где больше всего ошибок, дальше по убыванию, плюс по одному вопросу из блоков без ошибок. Время — 2 часа, как у экзамена. Получится черновик: вы его проверите, утвердите и откроете сотруднику — сразу или с нужной даты.${rev ? " Задания на ручной проверке (" + rev + ") не считаются ошибками — сначала поставьте по ним балл." : ""}</small></div>
-      <button class="btn small" id="artgen" type="button">Сформировать пересдачу</button></div>` : ""}`;
+    ${list.map(r => { const st = RT_STATE(r); return `<div class="rtline"><div><b>${esc(rtName(r))} · ${plural(r.count, "задание", "задания", "заданий")}</b>
+        <small><span class="tag ${st.c}">${esc(st.t)}</span></small></div>
+      <button class="btn small ${r.status === "approved" && !r.available && !r.opensAt ? "" : "white"}" data-rt="${esc(r.id)}" type="button">${r.status === "done" ? "Посмотреть" : "Открыть пересдачу"}</button></div>`; }).join("")}
+    ${busy ? (a.retakeOpen && !list.some(r => r.status !== "done") ? `<div class="rtline"><div><small>У сотрудника уже есть несданная пересдача по другой попытке — новую можно загрузить после неё.</small></div></div>` : "")
+      : `<div class="rtline rtcol"><div><b>${a.kind === "retake" ? "Ещё одна пересдача" : "Индивидуальная пересдача"}</b>
+        <small>Загрузите два файла пересдачи. Время — 2 часа, как у экзамена. Задания проверяются так же, как в экзамене: развёрнутые ответы — ИИ.</small></div>
+        <div id="rtnew"></div></div>`}`;
   $("#asend").onclick = once(async () => {
     try {
       await api("admin.reportSend", { id: a.id, sent: !a.sentAt });
@@ -311,119 +331,10 @@ function attemptRetakeBox(a) {
     } catch (e) { fail(e); }
   });
   box.querySelectorAll("[data-rt]").forEach(b => b.onclick = () => admRetake(b.dataset.rt, a));
-  box.querySelectorAll("[data-rtc]").forEach(b => b.onclick = once(async () => {
-    const id = await retakeGenerate(a, b.dataset.rtc);
-    if (id) admRetake(id, a);
-  }));
-  box.querySelectorAll("[data-rtd]").forEach(b => b.onclick = once(async () => {
-    if (!await ask({ title: "Удалить черновик?", ok: "Удалить", danger: true, text: "Недособранная пересдача будет удалена вместе с готовыми заданиями. Новую можно сформировать заново." })) return;
-    try { await api("admin.retakeDel", { id: b.dataset.rtd }); a.retakes = (a.retakes || []).filter(x => x.id !== b.dataset.rtd); attemptRetakeBox(a); toast("Черновик удалён"); }
-    catch (e) { fail(e); }
-  }));
-  if ($("#artgen")) $("#artgen").onclick = once(async () => {
-    const broken = list.filter(rtBroken)[0];
-    if (broken && await ask({ title: "Есть недособранный черновик", ok: "Продолжить его", cancel: "Собрать новый",
-        text: "Прошлая сборка прервалась: готово частей " + (broken.built || 0) + " из " + broken.parts + ". Быстрее и дешевле дособрать её, чем начинать заново." })) {
-      const id0 = await retakeGenerate(a, broken.id); if (id0) admRetake(id0, a); return;
-    }
-    if (list.some(r => r.status !== "done" && r !== broken) && !await ask({ title: "Уже есть пересдача", ok: "Сформировать ещё одну",
-        text: "По этой попытке уже есть несданная пересдача. Новая соберётся отдельным черновиком — лишнюю потом можно удалить." })) return;
-    const id = await retakeGenerate(a);
-    if (id) admRetake(id, a);
-  });
-}
-/* ИИ собирает черновик частями по 5 заданий, три части одновременно: иначе 80 заданий готовились бы четверть часа */
-async function retakeGenerate(a, resumeId) {
-  const back = el("div", "modal-back");
-  back.innerHTML = `<div class="modal" role="dialog" aria-modal="true" style="max-width:520px">
-    <b>Собираем пересдачу</b><p id="rgst">Считаем, сколько заданий нужно по каждому блоку…</p>
-    <div class="bar"><i id="rgbar" style="width:3%"></i></div>
-    <div id="rgplan" class="rgplan"></div>
-    <p class="hint">Обычно 4–8 минут. Не закрывайте страницу — готовые задания сохраняются по ходу. Если всё же закрыли — сборку можно будет продолжить.</p>
-    <div class="mbtns" id="rgbtns" hidden></div>
-    <div class="mbtns"><button class="btn ghost" id="rgcancel" type="button">Отменить сборку</button></div></div>`;
-  document.body.appendChild(back); lockScroll(true);
-  const close = () => { back.remove(); lockScroll(false); };
-  /* отмена: новые части не отправляем, начатые дожидаемся, недособранный черновик удаляем */
-  let stop = false, cancelled = false, wake = null;
-  back.querySelector("#rgcancel").onclick = () => {
-    if (cancelled) return;
-    cancelled = stop = true;
-    const b = back.querySelector("#rgcancel"); b.disabled = true; b.textContent = "Отменяем… дождёмся начатых частей";
-    if (wake) wake("cancel");                                 /* если висит вопрос «повторить части?» — снимаем его */
-  };
-  const cancelNow = async (id) => {
-    if (resumeId) { close(); toast("Сборка остановлена — черновик сохранён, продолжить можно позже"); return null; }   /* дособираемый черновик не удаляем */
-    if (id) { try { await api("admin.retakeDel", { id: id }); } catch (e) { /* черновик можно удалить и в списке пересдач */ } }
-    close(); toast("Сборка пересдачи отменена, черновик удалён");
-    return null;
-  };
-  const st = t => { back.querySelector("#rgst").textContent = t; };
-  const bar = p => { back.querySelector("#rgbar").style.width = Math.max(3, Math.round(p * 100)) + "%"; };
-  let head;
-  try { head = await api("admin.retakeGenerate", resumeId ? { attemptId: a.id, id: resumeId, resume: true } : { attemptId: a.id }); }
-  catch (e) { close(); if (!cancelled) fail(e); return null; }
-  if (cancelled) return cancelNow(head.id);
-  const plan = (head.byBlock || []).slice().sort((x, y) => y.count - x.count || blockNum(x.n) - blockNum(y.n));
-  /* конспекты на сайте зашифрованы — текст для ИИ расшифровывает этот браузер и отправляет вместе с частью */
-  const texts = {};
-  const textOf = async (id, url) => {
-    if (texts[id] !== undefined) return texts[id];
-    try {
-      const html = await matLoad(String(url).split("?")[0]);
-      const d = new DOMParser().parseFromString(html, "text/html");
-      d.querySelectorAll("script,style,svg,noscript").forEach(x => x.remove());
-      texts[id] = (d.body ? d.body.innerText || d.body.textContent : "").replace(/[ \t]+/g, " ").replace(/\n\s*\n+/g, "\n\n").trim().slice(0, 40000);
-    } catch (e) { texts[id] = ""; }
-    return texts[id];
-  };
-  const textsFor = async k => { const out = {}; for (const x of ((head.need || [])[k] || [])) out[x.id] = await textOf(x.id, x.url); return out; };
-  const bt = n => ((PR.program && PR.program.blocks || []).filter(b => Number(b.n) === Number(n))[0] || {}).title || "";
-  back.querySelector("#rgplan").innerHTML = plan.length ? `<div class="hint"><b>План: ${plural(head.planned, "задание", "задания", "заданий")}</b></div>` +
-    `<div class="hint">Новых по материалам — ${head.planned - (head.dup || 0)}, переформулировок заданий экзамена — ${head.dup || 0}</div>` +
-    plan.map(b => `<div class="rgrow"><span>${blockNum(b.n)}. ${esc(bt(b.n))}${b.noText ? ' <em title="У блока нет текстовых материалов — новые вопросы по фактам из ключа экзамена">· нет текстов, по ключу</em>' : ""}</span><b>${b.count}</b><i>${b.errors ? "ошибок " + b.errors : "без ошибок"}</i></div>`).join("") : "";
-  const had = new Set(head.doneChunks || []);                  /* при продолжении — только недостающие части */
-  const todo = [...Array(head.chunks).keys()].filter(k => !had.has(k)), failed = [];
-  let done = had.size, total = head.total || 0;
-  const paint = () => { st(`Составляем задания: готово ${done} из ${head.chunks} частей${total ? " · заданий " + total : ""}…`); bar(done / head.chunks); };
-  const worker = async () => {
-    while (todo.length && !stop) {
-      const k = todo.shift();
-      let ok = false;
-      for (let tryN = 0; tryN < 2 && !ok; tryN++) {                 /* сбой Google или ИИ — одна повторная попытка сразу */
-        try { const r = await api("admin.retakeGenerate", { attemptId: a.id, id: head.id, chunk: k, texts: await textsFor(k) }); total = Math.max(total, r.total); ok = true; }
-        catch (e) { if (tryN) failed.push({ k: k, msg: e.message }); }
-      }
-      done++; paint();
-    }
-  };
-  paint();
-  await Promise.all([worker(), worker(), worker()]);
-  if (cancelled) return cancelNow(head.id);
-  /* что не получилось — предлагаем повторить только эти части */
-  while (failed.length) {
-    const list = failed.splice(0);
-    const c = await new Promise(res => {
-      wake = res;
-      st(`Не получилось частей: ${list.length} из ${head.chunks} (${list[0].msg}). Остальные задания сохранены.`);
-      const b = back.querySelector("#rgbtns"); b.hidden = false;
-      b.innerHTML = `<button class="btn ghost" data-c="skip" type="button">Дальше без них</button><button class="btn" data-c="retry" type="button">Повторить эти части</button>`;
-      b.querySelectorAll("[data-c]").forEach(x => x.onclick = () => { b.hidden = true; res(x.dataset.c); });
-    });
-    wake = null;
-    if (c === "cancel" || cancelled) return cancelNow(head.id);
-    if (c !== "retry") break;
-    done = head.chunks - list.length; todo.push(...list.map(x => x.k)); paint();
-    await Promise.all([worker(), worker(), worker()]);
-    if (cancelled) return cancelNow(head.id);
-  }
-  bar(1); close();
-  if (a.retakes) a.retakes = a.retakes.filter(x => x.id !== head.id);   /* список пересдач перечитается при следующем открытии попытки */
-  toast(total ? "Черновик готов: " + plural(total, "задание", "задания", "заданий") + ". Проверьте и утвердите." : "ИИ не смог составить задания — добавьте их вручную");
-  return head.id;
+  if ($("#rtnew")) rtUpload($("#rtnew"), { fromAttempt: a.id }, r => { a.retakes = [r].concat(list); admRetake(r.id, a); });
 }
 
-/* редактор пересдачи: править можно, пока она закрыта для сотрудника */
+/* пересдача у РОПа: задания только для просмотра, открыть сотруднику — сразу или с даты, заменить файлы, удалить */
 async function admRetake(id, att) {
   const host = $("#admbody");
   host.innerHTML = `<div class="card"><p class="lead">Загружаем пересдачу…</p></div>`;
@@ -431,142 +342,55 @@ async function admRetake(id, att) {
   try {
     r = await api("admin.retakeGet", { id: id });
     if (!src || src.id !== r.fromAttempt) src = await api("admin.attempt", { id: r.fromAttempt }).catch(() => null);
-    if (!PR.program) PR.program = await api("program");
   } catch (e) { return fail(e); }
-  const orig = {}; ((src && src.answers) || []).forEach(x => orig[x.id] = x);
-  const qs = JSON.parse(JSON.stringify(r.questions || []));
-  const letters = "abcdef";
-  const locked = r.status === "done" || r.available;
-  const blocks = (PR.program.blocks || []);
+  const qs = r.questions || [];
   const st = RT_STATE(r);
-  const kindName = { single: "один ответ", multi: "несколько ответов", short: "ответ своими словами" };
+  const canEdit = r.status !== "done" && !r.available;
   const today = new Date(Date.now() + 864e5).toISOString().slice(0, 10);
   host.innerHTML = `<div class="card">
-    <div class="qhead"><div><h3>Индивидуальная пересдача</h3><h2>${esc(r.fio)}</h2></div><div class="chip">${esc(st.t)}</div></div>
-    <p class="lead">${r.status === "draft" ? "Черновик от ИИ. Проверьте каждое задание: формулировку, варианты и отмеченный верный ответ. Лишнее удалите, недостающее добавьте. Сотрудник ничего не увидит, пока вы не утвердите и не откроете пересдачу."
-      : r.status === "done" ? "Пересдача сдана — результат лежит в «Экзаменах»."
-      : r.available ? "Пересдача открыта сотруднику. Чтобы что-то поправить, сначала закройте доступ."
-      : r.opensAt ? "Утверждена и откроется сотруднику " + new Date(r.opensAt).toLocaleDateString("ru-RU") + ". До этого дня её можно поправить."
-      : "Утверждена, но сотруднику пока не видна. Откройте её сейчас или назначьте дату."}</p>
+    <div class="qhead"><div><h3>${esc(rtName(r))}</h3><h2>${esc(r.fio)}</h2></div><div class="chip">${esc(st.t)}</div></div>
+    <p class="lead">${r.status === "done" ? "Пересдача сдана — результат лежит в «Экзаменах»."
+      : r.available ? "Пересдача открыта сотруднику. Чтобы заменить файлы, сначала закройте доступ."
+      : r.opensAt ? "Откроется сотруднику " + new Date(r.opensAt).toLocaleDateString("ru-RU") + ". До этого дня файлы можно заменить."
+      : r.status === "draft" ? "Это черновик от прежней ИИ-сборки. Загрузите для него файлы пересдачи или удалите его."
+      : "Загружена, сотруднику пока не видна. Откройте её сейчас или назначьте дату."}</p>
     <p class="hint rtmeta">Время — 2 часа, как у экзамена. Пересдача не обрывается: после 2 часов в отчёте появится отметка о превышении.</p>
-    <div class="rtsum" id="rtsum"></div>
-    <div id="rtlist"></div>
-    ${locked ? "" : '<div class="foot"><button class="btn ghost" id="rtadd" type="button">+ Добавить задание</button></div>'}
+    ${r.title ? `<p class="hint">${esc(r.title)}</p>` : ""}
+    <div class="rtsum"><b>${plural(qs.length, "задание", "задания", "заданий")}</b>${Object.keys(r.byBlock || {}).sort((x, y) => r.byBlock[y] - r.byBlock[x])
+      .map(n => `<span class="tag">блок ${blockNum(n)} — ${r.byBlock[n]}</span>`).join("")}</div>
+    <div id="rtlist" class="rtlist">${qs.map((q, i) => `<details class="rtq2"><summary><b>${i + 1}</b><span>${esc(q.text)}</span>
+        <i>${esc(RT_KIND[q.type] || q.type)} · блок ${blockNum(q.block)} · ${plural(q.points, "балл", "балла", "баллов")}</i></summary>
+        ${q.right ? `<div class="hint"><b>Верно:</b> ${esc(q.right)}</div>` : ""}${q.explain ? `<div class="hint"><b>Почему:</b> ${esc(q.explain)}</div>` : ""}</details>`).join("")
+      || '<p class="hint">Заданий нет.</p>'}</div>
+    ${canEdit ? `<div class="rtline rtcol"><div><b>${r.status === "draft" ? "Загрузить файлы" : "Заменить файлы"}</b></div><div id="rtrep"></div></div>` : ""}
     <div class="foot rtfoot" id="rtfoot"></div></div>`;
-  const draw = () => {
-    const cnt = {}; qs.forEach(q => cnt[q.block] = (cnt[q.block] || 0) + 1);
-    const nNew = qs.filter(q => q.origin === "new").length, nKey = qs.filter(q => q.origin === "key").length;
-    $("#rtsum").innerHTML = `<b>${plural(qs.length, "задание", "задания", "заданий")}</b><span class="hint">новых ${nNew} · переформулировок ${nKey}</span>` + Object.keys(cnt).sort((x, y) => cnt[y] - cnt[x])
-      .map(n => `<span class="tag">блок ${blockNum(n)} — ${cnt[n]}</span>`).join("");
-    const list = $("#rtlist"); list.innerHTML = "";
-    if (!qs.length) list.appendChild(el("p", "hint", "Заданий пока нет."));
-    qs.forEach((q, i) => {
-      const o = q.origin === "new" || q.origin === "hand" ? null : orig[String(q.from || "").replace(/#\d+$/, "")];
-      const c = el("div", "q rtq");
-      const opts = q.options || [];
-      const isOn = id => q.type === "single" ? q.answer === id : [].concat(q.answer || []).includes(id);
-      c.innerHTML = `<div class="qn"><b>${i + 1}</b>
-          ${locked ? `<i>${esc(kindName[q.type] || q.type)}</i><i>блок ${blockNum(q.block)}</i>`
-            : `<select data-f="type">${Object.keys(kindName).map(k => `<option value="${k}" ${k === q.type ? "selected" : ""}>${kindName[k]}</option>`).join("")}</select>
-               <select data-f="block">${blocks.map(b => `<option value="${b.n}" ${Number(b.n) === Number(q.block) ? "selected" : ""}>блок ${blockNum(b.n)}</option>`).join("")}</select>`}
-          <i>${q.points} ${q.points === 1 ? "балл" : "балла"}</i>
-          ${locked ? "" : `<button class="mdel" data-f="del" type="button">Удалить</button>`}</div>
-        ${q.origin === "new" ? `<div class="rtorig rtnew">Новый вопрос по материалу${q.source ? " «" + esc(q.source) + "»" : ""}</div>` : ""}
-        ${o ? `<details class="rtorig"><summary>${o.correct === true ? "Переформулировка задания экзамена (ответил верно)" : "Переформулировка задания с ошибкой"}</summary><p>${esc(o.text || "")}</p>
-          <div class="hint"><b>Ответил:</b> ${esc(o.givenText || "")}</div><div class="hint"><b>Верно:</b> ${esc(o.right || "")}</div></details>` : ""}
-        <label class="f">Вопрос</label><textarea data-f="text" ${locked ? "disabled" : ""}>${esc(q.text || "")}</textarea>
-        ${q.type === "short" ? `<label class="f">Эталонный ответ</label><textarea data-f="model" ${locked ? "disabled" : ""}>${esc((q.answer && q.answer.model) || "")}</textarea>
-          <label class="f">Что обязательно должно быть в ответе (по пункту в строке)</label>
-          <textarea data-f="must" ${locked ? "disabled" : ""}>${esc(((q.answer && q.answer.must) || []).join("\n"))}</textarea>`
-        : `<label class="f">Варианты — отметьте ${q.type === "single" ? "один верный" : "все верные"}</label>
-          <div class="rtopts">${opts.map((x, j) => `<div class="rtopt ${isOn(x.id) ? "on" : ""}">
-              <input type="${q.type === "single" ? "radio" : "checkbox"}" name="rt${i}" data-ok="${j}" ${isOn(x.id) ? "checked" : ""} ${locked ? "disabled" : ""}>
-              <input type="text" data-opt="${j}" value="${esc(x.t)}" ${locked ? "disabled" : ""}>
-              ${locked ? "" : `<button class="mdel" data-rmopt="${j}" type="button" title="Убрать вариант">×</button>`}</div>`).join("")}</div>
-          ${locked || opts.length >= 6 ? "" : '<button class="btn small white" data-f="addopt" type="button">+ вариант</button>'}`}
-        <label class="f">Почему так (увидит сотрудник в разборе)</label><textarea data-f="explain" ${locked ? "disabled" : ""}>${esc(q.explain || "")}</textarea>`;
-      if (!locked) {
-        const f = n => c.querySelector(`[data-f="${n}"]`);
-        f("text").oninput = e => q.text = e.target.value;
-        f("explain").oninput = e => q.explain = e.target.value;
-        f("block").onchange = e => q.block = Number(e.target.value);
-        f("type").onchange = e => {
-          const t = e.target.value; if (t === q.type) return;
-          if (t === "short") { q.answer = { model: "", must: [] }; q.points = 2; delete q.options; }
-          else {
-            if (!q.options || !q.options.length) q.options = ["", "", "", ""].map((x, j) => ({ id: letters[j], t: "" }));
-            q.answer = t === "single" ? "" : []; q.points = t === "single" ? 1 : 2;
-          }
-          q.type = t; draw();
-        };
-        f("del").onclick = () => { qs.splice(i, 1); draw(); };
-        if (q.type === "short") {
-          f("model").oninput = e => { q.answer = q.answer || {}; q.answer.model = e.target.value; };
-          f("must").oninput = e => { q.answer = q.answer || {}; q.answer.must = e.target.value.split("\n").map(x => x.trim()).filter(Boolean); };
-        } else {
-          c.querySelectorAll("[data-opt]").forEach(inp => inp.oninput = () => { q.options[+inp.dataset.opt].t = inp.value; });
-          c.querySelectorAll("[data-ok]").forEach(inp => inp.onchange = () => {
-            const id = q.options[+inp.dataset.ok].id;
-            if (q.type === "single") q.answer = id;
-            else { const set = new Set([].concat(q.answer || [])); inp.checked ? set.add(id) : set.delete(id); q.answer = [...set]; }
-            draw();
-          });
-          c.querySelectorAll("[data-rmopt]").forEach(b => b.onclick = () => {
-            const gone = q.options.splice(+b.dataset.rmopt, 1)[0];
-            q.answer = q.type === "single" ? (q.answer === gone.id ? "" : q.answer) : [].concat(q.answer || []).filter(x => x !== gone.id);
-            draw();
-          });
-          if (f("addopt")) f("addopt").onclick = () => {
-            const used = new Set(q.options.map(x => x.id));
-            q.options.push({ id: letters.split("").filter(x => !used.has(x))[0], t: "" }); draw();
-          };
-        }
-      }
-      list.appendChild(c);
-    });
-  };
-  const payload = () => ({ id: r.id, questions: qs });
   const act = async (fn, okText) => {
-    try { const upd = await fn(); if (okText) toast(okText); admRetake(r.id, src); return upd; } catch (e) { fail(e); }
+    try { await fn(); if (okText) toast(okText); admRetake(r.id, src); } catch (e) { fail(e); }
   };
+  if ($("#rtrep")) rtUpload($("#rtrep"), { id: r.id }, () => admRetake(r.id, src));
   const foot = $("#rtfoot");
   const btn = (txt, cls, fn) => { const b = el("button", "btn " + (cls || ""), txt); b.type = "button"; b.onclick = once(fn); foot.appendChild(b); return b; };
   btn("← К попытке", "ghost", () => src ? admAttempt(src.id) : admAttempts());
   if (r.status === "done") { if (r.attemptId) btn("Открыть результат", "", () => admAttempt(r.attemptId)); }
-  else if (r.available || (r.status === "approved" && r.opensAt)) {
-    btn("Закрыть доступ", "white", () => act(() => api("admin.retakeClose", { id: r.id }), "Доступ закрыт — пересдача снова только у вас"));
-    if (!r.available) btn("Сохранить", "", () => act(() => api("admin.retakeSave", payload()), "Сохранено"));
-  } else {
-    btn("Сохранить", "white", () => act(() => api("admin.retakeSave", payload()), "Сохранено"));
-    if (r.status === "draft") btn("Утвердить", "", () => act(async () => {
-      await api("admin.retakeSave", payload()); return api("admin.retakeApprove", { id: r.id });
-    }, "Утверждено. Сотрудник пока не видит пересдачу — откройте её сейчас или с даты"));
-    else {
-      const wrap = el("span", "rtdate"); wrap.innerHTML = `<label class="f">Дата, с которой пересдача откроется сама</label><input type="date" id="rtwhen" min="${today}" value="${today}">`;
-      foot.appendChild(wrap);
-      btn("Открыть сейчас", "", async () => {
-        if (!await ask({ title: "Открыть пересдачу", ok: "Открыть", text: `<b>${esc(r.fio)}</b> сразу увидит пересдачу во вкладке «Экзамен». Разбор прошлой попытки у него скроется до сдачи.` })) return;
-        await act(async () => { await api("admin.retakeSave", payload()); return api("admin.retakeOpen", { id: r.id, when: "now" }); }, "Пересдача открыта сотруднику");
-      });
-      btn("Открыть с даты", "white", async () => {
-        const w = $("#rtwhen").value; if (!w) return toast("Выберите дату");
-        await act(async () => { await api("admin.retakeSave", payload()); return api("admin.retakeOpen", { id: r.id, when: w }); },
-          "Пересдача откроется " + new Date(w + "T00:00").toLocaleDateString("ru-RU"));
-      });
-    }
+  else if (r.available || r.opensAt) btn("Закрыть доступ", "white", () => act(() => api("admin.retakeClose", { id: r.id }), "Доступ закрыт — пересдача снова только у вас"));
+  else if (r.status === "approved" && qs.length) {
+    const wrap = el("span", "rtdate"); wrap.innerHTML = `<label class="f">Дата, с которой пересдача откроется сама</label><input type="date" id="rtwhen" min="${today}" value="${today}">`;
+    foot.appendChild(wrap);
+    btn("Открыть сейчас", "", async () => {
+      if (!await ask({ title: "Открыть пересдачу", ok: "Открыть", text: `<b>${esc(r.fio)}</b> сразу увидит пересдачу во вкладке «Экзамен». Разбор прошлой попытки у него скроется до сдачи.` })) return;
+      await act(() => api("admin.retakeOpen", { id: r.id, when: "now" }), "Пересдача открыта сотруднику");
+    });
+    btn("Открыть с даты", "white", async () => {
+      const w = $("#rtwhen").value; if (!w) return toast("Выберите дату");
+      await act(() => api("admin.retakeOpen", { id: r.id, when: w }), "Пересдача откроется " + new Date(w + "T00:00").toLocaleDateString("ru-RU"));
+    });
   }
   if (r.status !== "done") btn("Удалить", "red", async () => {
-    if (!await ask({ title: "Удалить пересдачу?", danger: true, ok: "Удалить", text: "Задания этой пересдачи будут стёрты. Отменить нельзя." })) return;
-    try { await api("admin.retakeDel", { id: r.id }); toast("Пересдача удалена"); src ? admAttempt(src.id) : admAttempts(); } catch (e) { fail(e); }
+    if (!await ask({ title: "Удалить пересдачу?", danger: true, ok: "Удалить", text: "Пересдача будет удалена, её файл уйдёт в корзину Диска. Новую можно загрузить заново." })) return;
+    try { await api("admin.retakeDel", { id: r.id }); toast("Пересдача удалена"); if (src) { src.retakes = (src.retakes || []).filter(x => x.id !== r.id); admAttempt(src.id); } else admAttempts(); } catch (e) { fail(e); }
   });
   const bs = foot.querySelectorAll(".btn");                /* на телефоне кнопки по две в ряд: последняя без пары — во всю ширину */
   if (bs.length % 2) bs[bs.length - 1].classList.add("wide");
-  if ($("#rtadd")) $("#rtadd").onclick = () => {
-    qs.push({ id: "", from: "", origin: "hand", block: (qs[0] && qs[0].block) || (blocks[0] && blocks[0].n) || 1, type: "single", points: 1, text: "", explain: "",
-              options: ["", "", "", ""].map((x, j) => ({ id: letters[j], t: "" })), answer: "" });
-    draw(); const last = $("#rtlist").lastElementChild; if (last) last.scrollIntoView({ behavior: "smooth", block: "center" });
-  };
-  draw();
 }
 
 /* ручная проверка задания: РОП ставит балл сам, итог попытки пересчитывается */

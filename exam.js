@@ -88,11 +88,14 @@ async function retakeData(info) {
   const prog = (PR.program && PR.program.blocks) || [], title = n => (prog.filter(b => Number(b.n) === Number(n))[0] || {}).title || "Блок " + blockNum(n);
   const pos = n => { const i = prog.findIndex(b => Number(b.n) === Number(n)); return i < 0 ? 999 : i; };
   const by = {};
-  (r.questions || []).forEach(q => {
-    const b = by[q.block] || (by[q.block] = { n: q.block, title: title(q.block), short: title(q.block), questions: [] });
-    b.questions.push({ id: q.id, type: q.type, text: q.text, points: Number(q.points) || 1, b: q.block, opts: q.opts || [] });
+  (r.questions || []).forEach(q => {                 /* задания пересдачи — в том же виде, что в экзамене: любые типы, включая тренажёры */
+    const n = q.b || q.block;
+    const b = by[n] || (by[n] = { n: n, title: title(n), short: title(n), questions: [] });
+    b.questions.push(Object.assign({}, q, { b: n, points: Number(q.points) || 1 }));
   });
-  return { retake: true, id: r.id, version: "retake", minutes: r.minutes || info.minutes || 30, pass: 0.9, schemes: {},
+  let schemes = {};                                  /* схемы оборудования берём из экзамена, если задание на них ссылается */
+  if ((r.questions || []).some(q => q.scheme)) { try { schemes = JSON.parse(await matLoad("data/exam.json")).schemes || {}; } catch (e) { } }
+  return { retake: true, id: r.id, n: r.n || 0, version: "retake", minutes: r.minutes || info.minutes || 30, pass: 0.9, schemes: schemes,
            blocks: Object.keys(by).map(k => by[k]).sort((x, y) => pos(x.n) - pos(y.n) || blockNum(x.n) - blockNum(y.n)) };
 }
 async function screenRetakeIntro(info) {
@@ -102,9 +105,9 @@ async function screenRetakeIntro(info) {
   $("#timer").hidden = true;
   const draft = (() => { try { return JSON.parse(localStorage.getItem(LSKEY()) || "null"); } catch (_) { return null; } })();
   $("#app").innerHTML = `<div class="card retake-card">
-    <div class="qhead"><div><h3>Руководитель открыл</h3><h2>Индивидуальная пересдача</h2></div><div class="chip">${info.count} заданий</div></div>
-    <p class="lead">Задания составлены по материалам уроков, больше всего — по темам, где в экзамене было больше ошибок. Почти все вопросы новые.
-      ${plural(info.count, "задание", "задания", "заданий")}, время — 2 часа, как у экзамена. Порог сдачи — 90%.</p>
+    <div class="qhead"><div><h3>Руководитель открыл</h3><h2>Индивидуальная пересдача${info.n > 1 ? " " + info.n : ""}</h2></div><div class="chip">${plural(info.count, "задание", "задания", "заданий")}</div></div>
+    <p class="lead">Задания составлены по материалам уроков, больше всего — по темам, где было больше ошибок. Почти все вопросы новые.
+      Время — 2 часа, как у экзамена. Порог сдачи — 90%.</p>
     <div class="note"><b>Как это работает.</b> Ответы сохраняются в браузере: если страница закроется, работа не потеряется.
       Время фиксируется, но пересдача не обрывается — после 2 часов появится только отметка о превышении. Проверка идёт на сервере.</div>
     <div class="note warn"><b>Пока идёт пересдача, разбор прошлой попытки закрыт.</b> Он снова появится здесь после отправки ответов.</div>
@@ -447,26 +450,27 @@ function exFinishDialog(miss) {
     const back = el("div", "modal-back");
     const rows = EX.data.blocks.map((b, i) => ({ i: i, title: b.short || b.title, k: b.questions.filter(q => !exAnswered(q)).length }))
       .filter(r => r.k);
-    const none = miss.length === exAll().length;
+    const none = miss.length === exAll().length, rt = EX.mode === "retake";
+    const w = rt ? { e: "пересдачу", ee: "пересдаче", E: "Пустую пересдачу" } : { e: "экзамен", ee: "экзамену", E: "Пустой экзамен" };
     back.innerHTML = none
       ? `<div class="modal finish" role="dialog" aria-modal="true">
           <b>Вы ещё не ответили ни на один вопрос</b>
-          <p>Пустой экзамен отправить нельзя. Ответьте хотя бы на часть вопросов — ответы сохраняются сами.</p>
-          <div class="mbtns"><button type="button" class="btn blue" data-a="0">Вернуться к экзамену</button></div></div>`
+          <p>${w.E} отправить нельзя. Ответьте хотя бы на часть вопросов — ответы сохраняются сами.</p>
+          <div class="mbtns"><button type="button" class="btn blue" data-a="0">Вернуться к ${w.ee}</button></div></div>`
       : miss.length
       ? `<div class="modal finish" role="dialog" aria-modal="true">
           <b>Есть вопросы без ответа</b>
           <p>Вы не ответили на ${plural(miss.length, "вопрос", "вопроса", "вопросов")}:</p>
           <div class="misslist">${rows.map(r => `<button type="button" class="missrow" data-i="${r.i}">
               <span>Раздел ${r.i + 1}. ${esc(r.title)}</span><b>${r.k}</b></button>`).join("")}</div>
-          <div class="note warn">Если завершить экзамен сейчас, за вопросы без ответа будет <strong style="display:inline">0 баллов</strong>.</div>
-          <div class="mbtns"><button type="button" class="btn green" data-a="0">Вернуться к экзамену</button>
+          <div class="note warn">Если завершить ${w.e} сейчас, за вопросы без ответа будет <strong style="display:inline">0 баллов</strong>.</div>
+          <div class="mbtns"><button type="button" class="btn green" data-a="0">Вернуться к ${w.ee}</button>
             <button type="button" class="btn red" data-a="1">Завершить</button></div></div>`
       : `<div class="modal finish" role="dialog" aria-modal="true">
-          <b>Завершить экзамен?</b>
-          <p>Вы ответили на все вопросы. Вы уверены, что хотите завершить экзамен и отправить ответы? Изменить их после этого будет нельзя.</p>
-          <div class="mbtns"><button type="button" class="btn blue" data-a="0">Вернуться к экзамену</button>
-            <button type="button" class="btn green" data-a="1">Завершить экзамен</button></div></div>`;
+          <b>Завершить ${w.e}?</b>
+          <p>Вы ответили на все вопросы. Вы уверены, что хотите завершить ${w.e} и отправить ответы? Изменить их после этого будет нельзя.</p>
+          <div class="mbtns"><button type="button" class="btn blue" data-a="0">Вернуться к ${w.ee}</button>
+            <button type="button" class="btn green" data-a="1">Завершить ${w.e}</button></div></div>`;
     const done = v => { back.remove(); lockScroll(false); res(v); };
     back.querySelector('[data-a="0"]').onclick = () => done(false);
     const fin = back.querySelector('[data-a="1"]'); if (fin) fin.onclick = () => done(true);
