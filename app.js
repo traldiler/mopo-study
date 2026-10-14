@@ -2697,10 +2697,23 @@ function locSave() {
   if (location.hash !== h) try { history.replaceState(null, "", h); } catch (e) { /* не страшно */ }
 }
 document.addEventListener("click", () => setTimeout(locSave, 80), true);
+/* ссылку на материал вставили в уже открытый кабинет — страница не перезагружается, открываем материал сами */
+window.addEventListener("hashchange", () => {
+  if (!APP.user || (typeof EX !== "undefined" && EX.running)) return;
+  const l = new URLSearchParams(location.hash.slice(1)).get("l");
+  if (l && l !== LOC.l && lessonById(l)) openLessonById(l);
+});
 async function locRestore() {
   const q = new URLSearchParams(location.hash.slice(1)), sc = q.get("s") || "";
   const staff = isStaff(APP.user);
   if (/^adm:/.test(sc) && staff) { go(sc); return true; }
+  const lnk = q.get("l");
+  if (lnk && sc !== "exam" && !/^adm:/.test(sc)) {      /* ссылка на материал (её могли прислать из «Моих записей») — открываем сам материал */
+    APP.screen = "cabinet"; if (staff) try { localStorage.setItem(modeKey(), "mopo"); } catch (e) { }
+    renderNav(); await screenCabinet();
+    openLessonById(lnk);
+    return true;
+  }
   if (/^(notes|questions|exam|profile)$/.test(sc)) { go(sc); return true; }
   if (sc === "cabinet") {
     APP.screen = "cabinet"; if (staff) try { localStorage.setItem(modeKey(), "mopo"); } catch (e) { }

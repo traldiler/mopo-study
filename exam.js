@@ -189,8 +189,11 @@ function exCard(q, idx) {
     order: "расставьте по порядку", sim_calc: "тренажёр: просчёт по файлу завода" }[q.type] || "задание";
   c.appendChild(el("div", "qn", `<b>ВОПРОС ${idx}</b><i>${kind}</i>${q.points > 1 ? `<i>${plural(q.points, "балл", "балла", "баллов")}</i>` : ""}`));
   c.appendChild(el("p", "qt", esc(q.text)));
-  if (q.scheme && EX.data.schemes[q.scheme])
-    c.appendChild(el("figure", "figure", EX.data.schemes[q.scheme].svg + `<figcaption>${esc(EX.data.schemes[q.scheme].name)}</figcaption>`));
+  if (q.scheme && EX.data.schemes[q.scheme]) {        /* схема — подсказка начинающему: без подписи и без номеров деталей (их расшифровка — на странице схем) */
+    const svg = EX.data.schemes[q.scheme].svg.replace(/<g class="pin">[\s\S]*?<\/g>/g, "").replace(/<path class="lead"[^>]*\/>/g, "");
+    c.appendChild(el("p", "hint schint", "Вы пока начинающий МОПО, поэтому к заданию прикреплена схема оборудования — как подсказка."));
+    c.appendChild(el("figure", "figure", svg));
+  }
   const box = el("div", "opts");
   const set = v => { EX.answers[q.id] = v; exTouch(q); exBlock(); };
   if (q.type === "single" || q.type === "multi" || q.type === "odd") {

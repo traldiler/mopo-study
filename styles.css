@@ -1905,3 +1905,4 @@ label.f{font-family:var(--f-text); font-size:13px; font-weight:600; letter-spaci
 .rtq2 summary i{flex:0 0 auto; font-style:normal; font-size:12px; color:var(--muted);}
 .rtq2 .hint{margin-top:6px;}
 @media (max-width:760px){ .rtup .btn{align-self:stretch; justify-content:center;} }
+.schint{margin:0 0 6px;}
