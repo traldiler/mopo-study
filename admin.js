@@ -418,15 +418,28 @@ function gradeAnswer(a, r) {
   const close = () => { back.remove(); lockScroll(false); };
   back.querySelector('[data-a="0"]').onclick = close;
   back.querySelector('[data-a="1"]').onclick = once(async () => {
+    const sb = back.querySelector('[data-a="1"]'), note = back.querySelector("#gnote").value.trim();
+    sb.textContent = "Сохраняем…";
     try {
-      const upd = await api("admin.attemptGrade", { id: a.id, qid: r.id, points: выбрано, note: back.querySelector("#gnote").value.trim() });
+      let upd;
+      try { upd = await api("admin.attemptGrade", { id: a.id, qid: r.id, points: выбрано, note: note }); }
+      catch (e) {
+        /* Google иногда теряет ответ, хотя балл уже записан: сверяем попытку, прежде чем пугать ошибкой */
+        if (/не ответил|долго не отвечает|Сбой сервера Google/.test(e.message || "")) {
+          sb.textContent = "Проверяем, сохранился ли балл…";
+          const cur = await api("admin.attempt", { id: a.id }).catch(() => null);
+          const x = cur && (cur.answers || []).filter(q => q.id === r.id)[0];
+          if (x && Number(x.points) === выбрано && x.manual && x.manual.note === note.slice(0, 300)) upd = cur;
+          else throw new Error("Балл не сохранился: Google не ответил. Нажмите «Сохранить балл» ещё раз — повтор ничего не испортит");
+        } else throw e;
+      }
       close();
       const y = window.scrollY;
       await admAttempt(a.id, upd);
       $("#alist").hidden = false; $("#atoggle").textContent = "Скрыть ответы";
       window.scrollTo(0, y);
       toast("Балл сохранён: " + upd.score + " из " + upd.max + " — " + upd.percent + "% · " + upd.verdict);
-    } catch (e) { fail(e); }
+    } catch (e) { sb.textContent = "Сохранить балл"; fail(e); }
   });
 }
 
